@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "loxone-hueapi2"
+version = "0.1.0"
+description = "LoxBerry plugin to expose Philips Hue API v2 resources to Loxone"
+authors = [{ name = "ChatGPT" }]
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = [
+    "fastapi",
+    "uvicorn[standard]",
+    "requests",
+    "pydantic"
+]
+
+[project.optional-dependencies]
+test = [
+    "pytest",
+    "responses"
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["hue_plugin"]

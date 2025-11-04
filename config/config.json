@@ -1,0 +1,7 @@
+{
+  "bridge_ip": "192.168.1.2",
+  "application_key": "your-hue-application-key",
+  "client_key": null,
+  "use_https": true,
+  "verify_tls": false
+}
