@@ -43,6 +43,20 @@ mit der Hue Bridge interagieren:
 | POST    | `/scenes/{id}/activate`      | Szene aktivieren                       |
 | GET     | `/rooms`                     | Liste aller Räume (Areas/Zonen)        |
 
+## Weboberfläche im LoxBerry
+
+Nach der Installation erscheint das Plugin in der LoxBerry-Systemsteuerung. Beim
+Aufruf wird automatisch die Datei `webfrontend/html/index.php` geladen, die die
+grafische Oberfläche ausliefert. Dort kannst du
+
+* die Verbindung zum lokalen REST-Dienst testen,
+* Lampen, Räume und Szenen direkt auslesen,
+* sowie einzelne Lampen oder Szenen zum Testen schalten.
+
+Die Oberfläche erwartet, dass der REST-Dienst auf Port `5510` auf demselben LoxBerry
+läuft. Falls du Port oder Hostname geändert hast, lässt sich dies über das Eingabefeld
+"Basis-URL" anpassen.
+
 ## Plugin-Paket für LoxBerry
 
 GitHub-Kompatibilität beschränkt die Bereitstellung fertiger ZIP-Archive in diesem
