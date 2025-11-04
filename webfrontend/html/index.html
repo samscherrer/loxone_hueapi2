@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="de">
+  <head>
+    <meta charset="utf-8" />
+    <title>Philips Hue API v2 Bridge</title>
+    <style>
+      body { font-family: Arial, sans-serif; margin: 2rem; line-height: 1.5; }
+      code { background: #f5f5f5; padding: 0.2rem 0.4rem; border-radius: 4px; }
+      pre { background: #f5f5f5; padding: 1rem; border-radius: 4px; overflow-x: auto; }
+    </style>
+  </head>
+  <body>
+    <h1>Philips Hue API v2 Bridge</h1>
+    <p>
+      Dieses Plugin startet einen REST-Dienst, der Philips Hue Lampen, Szenen und Räume
+      für Loxone bereitstellt. Nach der Installation wird automatisch ein virtuelles
+      Python-Umfeld erstellt und die benötigten Pakete werden installiert.
+    </p>
+    <h2>Konfiguration</h2>
+    <ol>
+      <li>Öffne die Datei <code>config/config.json</code> im Plugin-Verzeichnis.</li>
+      <li>Trage die IP-Adresse deiner Hue Bridge und den Application-Key ein.</li>
+      <li>Optional: Passe den Standard-Port (5510) in <code>bin/run_server.sh</code> an.</li>
+    </ol>
+    <h2>REST-Endpunkte</h2>
+    <p>Der Dienst stellt u. a. folgende Endpunkte bereit:</p>
+    <ul>
+      <li><code>GET /lights</code> – Liste aller Lampen</li>
+      <li><code>POST /lights/{id}/state</code> – Schalten oder Dimmen</li>
+      <li><code>GET /scenes</code> – Szenen auflisten</li>
+      <li><code>POST /scenes/{id}/activate</code> – Szene aktivieren</li>
+    </ul>
+    <p>
+      Nutze in Loxone HTTP-Kommandos, um mit diesen Endpunkten zu interagieren.
+    </p>
+  </body>
+</html>
