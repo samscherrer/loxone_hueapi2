@@ -28,22 +28,49 @@ LBHOMEDIR="${LBHOMEDIR:-REPLACELBHOMEDIR}"
 LBPPLUGINDIR="${LBPPLUGINDIR:-REPLACELBPPLUGINDIR}"
 
 resolve_plugin_root() {
-  local candidate=""
+  local candidates=()
+  local first_creatable=""
 
   if [[ -n "${LBPPLUGINDIR:-}" && "${LBPPLUGINDIR}" != "$PLACEHOLDER_LBP" ]]; then
-    candidate="${LBPPLUGINDIR}"
-  elif [[ -n "${LBHOMEDIR:-}" && "${LBHOMEDIR}" != "$PLACEHOLDER_LBH" && -n "$PDIR" ]]; then
-    candidate="$LBHOMEDIR/data/plugins/$PDIR"
+    candidates+=("${LBPPLUGINDIR}")
   fi
 
-  if [[ -z "$candidate" ]]; then
-    candidate="$(cd "$SCRIPT_DIR/.." && pwd)"
+  if [[ -n "${LBHOMEDIR:-}" && "${LBHOMEDIR}" != "$PLACEHOLDER_LBH" && -n "$PDIR" ]]; then
+    candidates+=("$LBHOMEDIR/data/plugins/$PDIR")
+    candidates+=("$LBHOMEDIR/bin/plugins/$PDIR")
   fi
 
-  printf '%s' "$candidate"
+  if [[ -n "$PDIR" ]]; then
+    candidates+=("/opt/loxberry/data/plugins/$PDIR")
+    candidates+=("/opt/loxberry/bin/plugins/$PDIR")
+  fi
+
+  candidates+=("$(cd "$SCRIPT_DIR/.." && pwd)")
+
+  for candidate in "${candidates[@]}"; do
+    if [[ -z "$candidate" ]]; then
+      continue
+    fi
+
+    if [[ -d "$candidate" ]]; then
+      printf '%s' "$candidate"
+      return 0
+    fi
+
+    if [[ -z "$first_creatable" ]]; then
+      first_creatable="$candidate"
+    fi
+  done
+
+  if [[ -n "$first_creatable" ]]; then
+    printf '%s' "$first_creatable"
+    return 0
+  fi
+
+  return 1
 }
 
-PLUGIN_ROOT="$(resolve_plugin_root)"
+PLUGIN_ROOT="$(resolve_plugin_root || true)"
 
 if [[ -z "$PLUGIN_ROOT" ]]; then
   log "ERROR" "Konnte das Plugin-Verzeichnis nicht bestimmen (PDIR=$PDIR)."
