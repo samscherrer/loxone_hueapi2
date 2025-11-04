@@ -43,6 +43,19 @@ mit der Hue Bridge interagieren:
 | POST    | `/scenes/{id}/activate`      | Szene aktivieren                       |
 | GET     | `/rooms`                     | Liste aller Räume (Areas/Zonen)        |
 
+## Plugin-Paket für LoxBerry erstellen
+
+Damit das Projekt direkt auf einem LoxBerry installiert werden kann, steht ein
+Hilfsskript bereit, das ein ZIP-Paket inklusive aller notwendigen Dateien erzeugt.
+
+```bash
+./build_plugin_zip.sh
+```
+
+Die resultierende Datei liegt unter `dist/` und kann über die LoxBerry-Weboberfläche
+installiert werden. Während der Installation sorgt `postroot.sh` dafür, dass ein
+virtuelles Python-Umfeld angelegt und das Plugin darin installiert wird.
+
 ## Einbindung in Loxone
 
 Innerhalb von Loxone kann dieser Dienst beispielsweise über HTTP-Kommandos angesteuert
