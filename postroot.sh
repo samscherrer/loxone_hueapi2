@@ -30,6 +30,21 @@ if [[ -z "$PLUGIN_ROOT" || "$PLUGIN_ROOT" == "REPLACELBPPLUGINDIR" ]]; then
   if [[ -n "${LBPHTML:-}" && -n "$PDIR" ]]; then
     candidates+=("$LBPHTML/$PDIR")
   fi
+  if [[ -n "$PTEMPPATH" && -d "$PTEMPPATH" ]]; then
+    candidates+=("$PTEMPPATH")
+    if [[ -n "$PDIR" ]]; then
+      candidates+=("$PTEMPPATH/$PDIR")
+    fi
+  fi
+  if [[ -n "$PTEMPDIR" && -d "$PTEMPDIR" ]]; then
+    candidates+=("$PTEMPDIR")
+    if [[ -n "$PDIR" ]]; then
+      candidates+=("$PTEMPDIR/$PDIR")
+    fi
+    while IFS= read -r cfg_path; do
+      candidates+=("$(dirname "$cfg_path")")
+    done < <(find "$PTEMPDIR" -maxdepth 2 -type f -name plugin.cfg 2>/dev/null)
+  fi
   # Fallback to script location when testing outside of LoxBerry
   candidates+=("$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)")
 
