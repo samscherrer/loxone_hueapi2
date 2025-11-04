@@ -14,71 +14,68 @@ PDIR=${3:-}
 PVERSION=${4:-}
 PTEMPPATH=${6:-}
 
-PLUGIN_ROOT=${LBPPLUGINDIR:-REPLACELBPPLUGINDIR}
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SOURCE_ROOT="$SCRIPT_DIR"
 
-declare -a _candidates=()
+resolve_plugin_root() {
+  local candidate=""
 
-add_candidate() {
-  local candidate="$1"
+  if [[ -n "${LBPPLUGINDIR:-}" && "${LBPPLUGINDIR}" != "REPLACELBPPLUGINDIR" ]]; then
+    candidate="${LBPPLUGINDIR}"
+  elif [[ -n "${LBHOMEDIR:-}" && -n "$PDIR" ]]; then
+    candidate="$LBHOMEDIR/data/plugins/$PDIR"
+  fi
+
   if [[ -z "$candidate" ]]; then
-    return
+    candidate="$(cd "$SCRIPT_DIR/.." && pwd)"
   fi
-  if [[ ! -d "$candidate" ]]; then
-    return
-  fi
-  case "$candidate" in
-    *"/tmp/"*|*"/tmp"|*"/uploads"* )
-      # Ignore temporary extraction folders created by the installer.
-      return
-      ;;
-  esac
-  _candidates+=("$candidate")
+
+  printf '%s' "$candidate"
 }
 
-if [[ -z "$PLUGIN_ROOT" || "$PLUGIN_ROOT" == "REPLACELBPPLUGINDIR" ]]; then
-  add_candidate "${LBPPLUGINDIR:-}"
-  add_candidate "${LBPDATA:-}"
-  add_candidate "${LBPBIN:-}"
-  add_candidate "${LBPHTML:-}"
+PLUGIN_ROOT="$(resolve_plugin_root)"
 
-  if [[ -n "${LBHOMEDIR:-}" && -n "$PDIR" ]]; then
-    add_candidate "$LBHOMEDIR/data/plugins/$PDIR"
-    add_candidate "$LBHOMEDIR/system/plugins/$PDIR"
-    add_candidate "$LBHOMEDIR/bin/plugins/$PDIR"
-  fi
-
-  if [[ -n "$PTEMPPATH" && -d "$PTEMPPATH" ]]; then
-    add_candidate "$PTEMPPATH/$PDIR"
-  fi
-  if [[ -n "$PTEMPDIR" && -d "$PTEMPDIR" ]]; then
-    while IFS= read -r cfg_path; do
-      add_candidate "$(dirname "$cfg_path")"
-    done < <(find "$PTEMPDIR" -maxdepth 2 -type f -name plugin.cfg 2>/dev/null)
-  fi
-
-  # Fallback to the repository root when developing locally.
-  add_candidate "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-
-  for path in "${_candidates[@]}"; do
-    if [[ -f "$path/requirements.txt" ]]; then
-      PLUGIN_ROOT="$path"
-      break
-    fi
-  done
+if [[ -z "$PLUGIN_ROOT" ]]; then
+  log "ERROR" "Konnte das Plugin-Verzeichnis nicht bestimmen (PDIR=$PDIR)."
+  exit 1
 fi
 
-if [[ -z "$PLUGIN_ROOT" || ! -d "$PLUGIN_ROOT" || ! -f "$PLUGIN_ROOT/requirements.txt" ]]; then
-  log "ERROR" "Konnte das Plugin-Verzeichnis nicht bestimmen (PDIR=$PDIR)."
+mkdir -p "$PLUGIN_ROOT"
+log "INFO" "Verwende Plugin-Verzeichnis: $PLUGIN_ROOT"
+
+copy_into_plugin_root() {
+  local src="$1"
+  local dest="$PLUGIN_ROOT"
+  local base
+
+  if [[ ! -e "$src" ]]; then
+    return
+  fi
+
+  base="$(basename "$src")"
+
+  if [[ -d "$src" ]]; then
+    rm -rf "$dest/$base"
+    cp -a "$src" "$dest/"
+  else
+    cp -a "$src" "$dest/$base"
+  fi
+}
+
+if [[ "$SOURCE_ROOT" != "$PLUGIN_ROOT" ]]; then
+  log "INFO" "Synchronisiere Plugindateien aus $SOURCE_ROOT"
+  copy_into_plugin_root "$SOURCE_ROOT/hue_plugin"
+  copy_into_plugin_root "$SOURCE_ROOT/requirements.txt"
+  copy_into_plugin_root "$SOURCE_ROOT/pyproject.toml"
+fi
+
+if [[ ! -f "$PLUGIN_ROOT/requirements.txt" ]]; then
+  log "ERROR" "requirements.txt wurde im Plugin-Verzeichnis nicht gefunden ($PLUGIN_ROOT)."
   exit 1
 fi
 
 REQ_FILE="$PLUGIN_ROOT/requirements.txt"
 VENV_DIR="$PLUGIN_ROOT/venv"
-
-if [[ ! -f "$REQ_FILE" ]]; then
-  log "ERROR" "requirements.txt wurde im Plugin-Verzeichnis nicht gefunden ($REQ_FILE)."
-  exit 1
-fi
 
 PYTHON_BIN=""
 if command -v python3 >/dev/null 2>&1; then
