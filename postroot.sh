@@ -15,48 +15,59 @@ PVERSION=${4:-}
 PTEMPPATH=${6:-}
 
 PLUGIN_ROOT=${LBPPLUGINDIR:-REPLACELBPPLUGINDIR}
+
+declare -a _candidates=()
+
+add_candidate() {
+  local candidate="$1"
+  if [[ -z "$candidate" ]]; then
+    return
+  fi
+  if [[ ! -d "$candidate" ]]; then
+    return
+  fi
+  case "$candidate" in
+    *"/tmp/"*|*"/tmp"|*"/uploads"* )
+      # Ignore temporary extraction folders created by the installer.
+      return
+      ;;
+  esac
+  _candidates+=("$candidate")
+}
+
 if [[ -z "$PLUGIN_ROOT" || "$PLUGIN_ROOT" == "REPLACELBPPLUGINDIR" ]]; then
-  candidates=()
+  add_candidate "${LBPPLUGINDIR:-}"
+  add_candidate "${LBPDATA:-}"
+  add_candidate "${LBPBIN:-}"
+  add_candidate "${LBPHTML:-}"
+
   if [[ -n "${LBHOMEDIR:-}" && -n "$PDIR" ]]; then
-    candidates+=("$LBHOMEDIR/data/plugins/$PDIR")
-    candidates+=("$LBHOMEDIR/system/plugins/$PDIR")
+    add_candidate "$LBHOMEDIR/data/plugins/$PDIR"
+    add_candidate "$LBHOMEDIR/system/plugins/$PDIR"
+    add_candidate "$LBHOMEDIR/bin/plugins/$PDIR"
   fi
-  if [[ -n "${LBPDATA:-}" && -n "$PDIR" ]]; then
-    candidates+=("$LBPDATA/$PDIR")
-  fi
-  if [[ -n "${LBPBIN:-}" && -n "$PDIR" ]]; then
-    candidates+=("$LBPBIN/$PDIR")
-  fi
-  if [[ -n "${LBPHTML:-}" && -n "$PDIR" ]]; then
-    candidates+=("$LBPHTML/$PDIR")
-  fi
+
   if [[ -n "$PTEMPPATH" && -d "$PTEMPPATH" ]]; then
-    candidates+=("$PTEMPPATH")
-    if [[ -n "$PDIR" ]]; then
-      candidates+=("$PTEMPPATH/$PDIR")
-    fi
+    add_candidate "$PTEMPPATH/$PDIR"
   fi
   if [[ -n "$PTEMPDIR" && -d "$PTEMPDIR" ]]; then
-    candidates+=("$PTEMPDIR")
-    if [[ -n "$PDIR" ]]; then
-      candidates+=("$PTEMPDIR/$PDIR")
-    fi
     while IFS= read -r cfg_path; do
-      candidates+=("$(dirname "$cfg_path")")
+      add_candidate "$(dirname "$cfg_path")"
     done < <(find "$PTEMPDIR" -maxdepth 2 -type f -name plugin.cfg 2>/dev/null)
   fi
-  # Fallback to script location when testing outside of LoxBerry
-  candidates+=("$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)")
 
-  for path in "${candidates[@]}"; do
-    if [[ -d "$path" && -f "$path/requirements.txt" ]]; then
+  # Fallback to the repository root when developing locally.
+  add_candidate "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+  for path in "${_candidates[@]}"; do
+    if [[ -f "$path/requirements.txt" ]]; then
       PLUGIN_ROOT="$path"
       break
     fi
   done
 fi
 
-if [[ -z "$PLUGIN_ROOT" || ! -d "$PLUGIN_ROOT" ]]; then
+if [[ -z "$PLUGIN_ROOT" || ! -d "$PLUGIN_ROOT" || ! -f "$PLUGIN_ROOT/requirements.txt" ]]; then
   log "ERROR" "Konnte das Plugin-Verzeichnis nicht bestimmen (PDIR=$PDIR)."
   exit 1
 fi
