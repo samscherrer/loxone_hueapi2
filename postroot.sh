@@ -17,12 +17,22 @@ PTEMPPATH=${6:-}
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SOURCE_ROOT="$SCRIPT_DIR"
 
+# Capture placeholder strings without triggering the LoxBerry installer
+# replacement so that we can detect whether values were substituted.
+PLACEHOLDER_LBH="REPLACE"'LBHOMEDIR'
+PLACEHOLDER_LBP="REPLACE"'LBPPLUGINDIR'
+
+# Ensure LoxBerry placeholders are expanded even if the environment variable
+# is not exported before running the script.
+LBHOMEDIR="${LBHOMEDIR:-REPLACELBHOMEDIR}"
+LBPPLUGINDIR="${LBPPLUGINDIR:-REPLACELBPPLUGINDIR}"
+
 resolve_plugin_root() {
   local candidate=""
 
-  if [[ -n "${LBPPLUGINDIR:-}" && "${LBPPLUGINDIR}" != "REPLACELBPPLUGINDIR" ]]; then
+  if [[ -n "${LBPPLUGINDIR:-}" && "${LBPPLUGINDIR}" != "$PLACEHOLDER_LBP" ]]; then
     candidate="${LBPPLUGINDIR}"
-  elif [[ -n "${LBHOMEDIR:-}" && -n "$PDIR" ]]; then
+  elif [[ -n "${LBHOMEDIR:-}" && "${LBHOMEDIR}" != "$PLACEHOLDER_LBH" && -n "$PDIR" ]]; then
     candidate="$LBHOMEDIR/data/plugins/$PDIR"
   fi
 
