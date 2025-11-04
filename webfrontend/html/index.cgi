@@ -1,5 +1,5 @@
-#!/bin/sh
-
-# Simple CGI wrapper to serve the static HTML landing page for the plugin.
-printf 'Content-type: text/html; charset=utf-8\r\n\r\n'
-cat "$(dirname "$0")/index.html"
+#!/bin/bash
+# Simple CGI wrapper so LoxBerry loads the static UI without showing a directory listing.
+echo "Content-type: text/html"
+echo
+exec /bin/cat "$(dirname "$0")/index.html"

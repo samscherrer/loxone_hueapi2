@@ -9,7 +9,7 @@
         color-scheme: light dark;
         --accent: #005a9c;
         --accent-light: #e2f1ff;
-        --card-bg: rgba(255, 255, 255, 0.85);
+        --card-bg: rgba(255, 255, 255, 0.9);
         --card-border: rgba(0, 0, 0, 0.08);
         font-family: "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
       }
@@ -86,7 +86,7 @@
         padding: 0.6rem 0.75rem;
         border-radius: 10px;
         border: 1px solid rgba(0, 0, 0, 0.2);
-        background: rgba(255, 255, 255, 0.9);
+        background: rgba(255, 255, 255, 0.92);
         transition: border 0.2s ease, box-shadow 0.2s ease;
       }
 
@@ -195,8 +195,14 @@
       }
 
       .muted {
-        opacity: 0.75;
+        opacity: 0.8;
         font-size: 0.9rem;
+      }
+
+      footer {
+        margin-top: 2rem;
+        color: rgba(255, 255, 255, 0.7);
+        font-size: 0.85rem;
       }
     </style>
   </head>
@@ -277,7 +283,7 @@
           <label for="scene-id">Szenen-RID</label>
           <input id="scene-id" type="text" placeholder="RID der Szene" />
           <label for="scene-target">Optionales Ziel (RID::rtype)</label>
-          <input id="scene-target" type="text" placeholder="<resource-id>::<rtype>" />
+          <input id="scene-target" type="text" placeholder="&lt;resource-id&gt;::&lt;rtype&gt;" />
           <div class="actions">
             <button id="scene-submit">Aktivieren</button>
           </div>
@@ -303,6 +309,11 @@
         </p>
       </section>
     </main>
+
+    <footer>
+      Tipp: Wenn du ein anderes Muster-Plugin ansehen möchtest, öffne die LoxBerry
+      Dokumentation unter <code>https://loxwiki.atlassian.net/wiki</code>.
+    </footer>
 
     <script>
       const baseUrlInput = document.getElementById("base-url");
