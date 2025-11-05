@@ -133,6 +133,19 @@ Mit diesen Informationen kannst du aus dem Miniserver heraus Szenen aktivieren o
 schalten – wahlweise über das REST-Backend auf Port `5510` oder direkt über das Plugin-
 Frontend.
 
+### Vorgehen in Loxone (Virtueller Ausgang)
+
+1. Lege im Miniserver einen **virtuellen Ausgang** an, der auf das LoxBerry-System zeigt.
+   Als IP-Adresse verwendest du den LoxBerry-Host, der Port bleibt bei `80` (HTTP).
+2. Erstelle unter diesem Ausgang einen **virtuellen Ausgangsbefehl**. Als Kommando trägst
+   du die entsprechende URL (siehe Beispiele unten) ein. Verwende `GET` und aktiviere bei
+   Bedarf die Option „Befehl bei EIN ausführen“.
+3. Setze im Plugin-Frontend die gewünschte Szene auf „Favorit“, damit du sie leicht
+   identifizieren kannst, und kopiere die dort angezeigte `scene_id` (sowie optional den
+   Ziel-Raum).
+4. Wiederhole den Schritt für Lampen oder zusätzliche Szenen. Jeder virtuelle Befehl kann
+   eine andere ID enthalten.
+
 ### Szenen oder Lampen per HTTP-Request auslösen
 
 Für einfache Integrationen (z. B. über einen virtuellen Ausgang) kann Loxone die
@@ -144,8 +157,10 @@ http://<loxberry-host>/admin/plugins/hueapiv2/index.php?ajax=1&action=scene_comm
 ```
 
 Optional kannst du einen Zielraum oder eine Zone angeben (Parameter `target_rid` und
-`target_rtype`). Das Plugin antwortet mit einer JSON-Struktur; ein erfolgreicher Aufruf liefert
-`{"ok": true}`.
+`target_rtype`). Damit stellst du sicher, dass die Szene in dem gewünschten Bereich
+aktiviert wird. Das Plugin antwortet mit einer JSON-Struktur; ein erfolgreicher Aufruf liefert
+`{"ok": true}`. Bei Bedarf kannst du zusätzliche Parameter (z. B. `target_rid=<room-id>` und
+`target_rtype=room`) direkt an die URL anhängen.
 
 Zum Schalten einer Lampe steht derselbe Mechanismus bereit:
 
@@ -155,6 +170,10 @@ http://<loxberry-host>/admin/plugins/hueapiv2/index.php?ajax=1&action=light_comm
 
 Die Parameter `on` (`1` oder `0`) und `brightness` (0–100) sind optional. Alternativ kannst du
 den Python-REST-Dienst weiterverwenden, wenn du lieber auf Port `5510` mit JSON arbeitest.
+
+> Tipp: In Loxone kannst du dieselbe URL auch in einem virtuellen Eingang verwenden, um
+> beispielsweise den Status eines Tasters zum Schalten einer Szene zu nutzen. Wichtig ist nur,
+> dass der Miniserver die vollständige URL mitsamt Parametern absetzt.
 
 ## Tests
 

@@ -41,6 +41,13 @@ class HueBridgeClient:
         self._session.headers.update({"hue-application-key": config.application_key})
         if config.client_key:
             self._session.headers.update({"hue-client-key": config.client_key})
+        if not config.verify_tls:
+            try:  # pragma: no cover - best effort helper
+                import urllib3
+
+                urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+            except Exception:
+                pass
 
     # -- high level resource helpers -------------------------------------------------
     def get_lights(self) -> Iterable[HueResource]:
@@ -65,7 +72,7 @@ class HueBridgeClient:
         target_rid: Optional[str] = None,
         target_rtype: Optional[str] = None,
     ) -> None:
-        body: _JSON = {"recall": {"action": "activate"}}
+        body: _JSON = {"recall": {"action": "active"}}
         if target_rid and target_rtype:
             body["recall"]["target"] = {"rid": target_rid, "rtype": target_rtype}
         self._put(f"scene/{scene_id}", json=body)

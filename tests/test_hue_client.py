@@ -51,6 +51,25 @@ def test_activate_scene_error(client: HueBridgeClient) -> None:
 
 
 @responses.activate
+def test_activate_scene_payload(client: HueBridgeClient) -> None:
+    responses.add(
+        responses.PUT,
+        "http://1.2.3.4/clip/v2/resource/scene/scene-id",
+        json={},
+        status=200,
+    )
+
+    client.activate_scene("scene-id")
+
+    import json
+
+    body = responses.calls[0].request.body
+    if isinstance(body, bytes):
+        body = body.decode()
+    payload = json.loads(body)
+    assert payload == {"recall": {"action": "active"}}
+
+@responses.activate
 def test_set_light_state_validates(client: HueBridgeClient) -> None:
     with pytest.raises(ValueError):
         client.set_light_state("1")
