@@ -1,20 +1,95 @@
 <?php
 declare(strict_types=1);
 
-$localFrontend = dirname(__DIR__) . '/html/index.php';
-if (is_readable($localFrontend)) {
-    require $localFrontend;
-    exit;
-}
+/**
+ * Attempt to require the UI from a list of candidate directories or files.
+ *
+ * @param string[] $candidates
+ */
+function lb_require_frontend(array $candidates): void
+{
+    $seen = [];
+    foreach ($candidates as $candidate) {
+        if ($candidate === '' || $candidate === null) {
+            continue;
+        }
 
-$publicFrontendDir = getenv('LBPHTMLDIR');
-if ($publicFrontendDir) {
-    $publicFrontend = rtrim($publicFrontendDir, '/\\') . '/index.php';
-    if (is_readable($publicFrontend)) {
-        require $publicFrontend;
+        $path = $candidate;
+        if (substr($path, -4) !== '.php') {
+            $path = rtrim($path, "\\/") . '/index.php';
+        }
+
+        $real = realpath($path);
+        if ($real === false) {
+            continue;
+        }
+
+        if ($real === __FILE__) {
+            continue;
+        }
+
+        if (isset($seen[$real])) {
+            continue;
+        }
+
+        $seen[$real] = true;
+
+        if (!is_file($real) || !is_readable($real)) {
+            continue;
+        }
+
+        require $real;
         exit;
     }
 }
+
+/**
+ * Convert a htmlauth directory path into the matching html directory path.
+ */
+function lb_html_from_auth(?string $authDir): ?string
+{
+    if ($authDir === null || $authDir === '') {
+        return null;
+    }
+
+    $normalized = rtrim($authDir, "\\/");
+    $needle = '/htmlauth/';
+    $pos = strpos($normalized, $needle);
+    if ($pos !== false) {
+        return substr($normalized, 0, $pos) . '/html/' . substr($normalized, $pos + strlen($needle));
+    }
+
+    $suffix = '/htmlauth';
+    if (substr($normalized, -strlen($suffix)) === $suffix) {
+        return substr($normalized, 0, -strlen($suffix)) . '/html';
+    }
+
+    return null;
+}
+
+$candidates = [];
+
+$envHtml = getenv('LBPHTMLDIR');
+if ($envHtml !== false && $envHtml !== '') {
+    $candidates[] = $envHtml;
+}
+
+$envHtmlAuth = getenv('LBPHTMLAUTHDIR');
+$derivedHtml = lb_html_from_auth($envHtmlAuth === false ? null : $envHtmlAuth);
+if ($derivedHtml !== null) {
+    $candidates[] = $derivedHtml;
+}
+
+$pluginDir = getenv('LBPPLUGINDIR');
+if ($pluginDir !== false && $pluginDir !== '') {
+    $candidates[] = rtrim($pluginDir, "\\/") . '/webfrontend/html/index.php';
+}
+
+// Development fallbacks when executed directly from the repository checkout.
+$candidates[] = dirname(__DIR__) . '/html/index.php';
+$candidates[] = dirname(__DIR__, 2) . '/webfrontend/html/index.php';
+
+lb_require_frontend($candidates);
 
 http_response_code(500);
 header('Content-Type: text/plain; charset=utf-8');
