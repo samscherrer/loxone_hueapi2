@@ -223,6 +223,13 @@ function call_hue_cli(array $args): array
 
     putenv('HUE_PLUGIN_CONFIG=' . plugin_config_path());
 
+    $existingPythonPath = getenv('PYTHONPATH');
+    $pythonPathSegments = [plugin_root()];
+    if ($existingPythonPath !== false && $existingPythonPath !== '') {
+        $pythonPathSegments[] = $existingPythonPath;
+    }
+    putenv('PYTHONPATH=' . implode(PATH_SEPARATOR, $pythonPathSegments));
+
     $process = proc_open($command, $descriptors, $pipes, plugin_root());
     if (!is_resource($process)) {
         throw new RuntimeException('Hue-Dienst konnte nicht gestartet werden.');
