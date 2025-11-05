@@ -193,7 +193,42 @@ function read_json_body(): array
 
 function plugin_root(): string
 {
-    return dirname(__DIR__, 2);
+    static $resolved = null;
+    if ($resolved !== null) {
+        return $resolved;
+    }
+
+    $pluginId = 'hueapiv2';
+    $placeholderLbp = 'REPLACELBPPLUGINDIR';
+    $placeholderLbh = 'REPLACELBHOMEDIR';
+
+    $candidates = [];
+
+    $lbpPluginDir = getenv('LBPPLUGINDIR');
+    if ($lbpPluginDir !== false && $lbpPluginDir !== '' && $lbpPluginDir !== $placeholderLbp) {
+        $candidates[] = $lbpPluginDir;
+    }
+
+    $lbHomeDir = getenv('LBHOMEDIR');
+    if ($lbHomeDir !== false && $lbHomeDir !== '' && $lbHomeDir !== $placeholderLbh) {
+        $candidates[] = $lbHomeDir . '/data/plugins/' . $pluginId;
+        $candidates[] = $lbHomeDir . '/bin/plugins/' . $pluginId;
+    }
+
+    $candidates[] = '/opt/loxberry/data/plugins/' . $pluginId;
+    $candidates[] = '/opt/loxberry/bin/plugins/' . $pluginId;
+    $candidates[] = dirname(__DIR__, 3);
+    $candidates[] = dirname(__DIR__, 2);
+
+    foreach ($candidates as $candidate) {
+        if ($candidate && is_dir($candidate)) {
+            $resolved = realpath($candidate) ?: $candidate;
+            return $resolved;
+        }
+    }
+
+    $resolved = dirname(__DIR__, 2);
+    return $resolved;
 }
 
 function python_binary(): string
