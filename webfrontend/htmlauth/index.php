@@ -191,67 +191,64 @@ function read_json_body(): array
     return $decoded;
 }
 
-function call_hue_service(string $path, string $method = 'GET', ?array $payload = null, ?string $bridgeId = null): array
+function plugin_root(): string
 {
-    $base = getenv('HUE_PLUGIN_SERVICE_BASE');
-    if (!$base) {
-        $host = getenv('HUE_PLUGIN_SERVICE_HOST') ?: '127.0.0.1';
-        $port = getenv('HUE_PLUGIN_SERVICE_PORT') ?: '5510';
-        $base = sprintf('http://%s:%s', $host, $port);
-    }
-    $url = rtrim($base, '/') . $path;
+    return dirname(__DIR__, 2);
+}
 
-    if ($bridgeId !== null && $bridgeId !== '') {
-        $separator = strpos($url, '?') !== false ? '&' : '?';
-        $url .= $separator . http_build_query(['bridge_id' => $bridgeId]);
+function python_binary(): string
+{
+    $root = plugin_root();
+    $venv = $root . '/venv/bin/python';
+    if (is_file($venv) && is_executable($venv)) {
+        return $venv;
     }
 
-    $ch = curl_init($url);
-    if ($ch === false) {
-        throw new RuntimeException('Hue-Dienst konnte nicht initialisiert werden.');
+    return 'python3';
+}
+
+/**
+ * @param list<string> $args
+ */
+function call_hue_cli(array $args): array
+{
+    $python = python_binary();
+    $command = array_merge([$python, '-m', 'hue_plugin.cli'], $args);
+
+    $descriptors = [
+        0 => ['pipe', 'r'],
+        1 => ['pipe', 'w'],
+        2 => ['pipe', 'w'],
+    ];
+
+    putenv('HUE_PLUGIN_CONFIG=' . plugin_config_path());
+
+    $process = proc_open($command, $descriptors, $pipes, plugin_root());
+    if (!is_resource($process)) {
+        throw new RuntimeException('Hue-Dienst konnte nicht gestartet werden.');
     }
 
-    $headers = ['Accept: application/json'];
-    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-    curl_setopt($ch, CURLOPT_TIMEOUT, 10);
-    curl_setopt($ch, CURLOPT_CUSTOMREQUEST, strtoupper($method));
+    fclose($pipes[0]);
+    $stdout = stream_get_contents($pipes[1]);
+    fclose($pipes[1]);
+    $stderr = stream_get_contents($pipes[2]);
+    fclose($pipes[2]);
+    $exitCode = proc_close($process);
 
-    if ($payload !== null) {
-        $body = json_encode($payload, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
-        if ($body === false) {
-            curl_close($ch);
-            throw new RuntimeException('Anfrage konnte nicht serialisiert werden.');
+    if ($exitCode !== 0) {
+        $message = trim($stderr !== '' ? $stderr : $stdout);
+        if ($message === '') {
+            $message = 'Unbekannter Fehler beim Aufruf des Hue-Dienstes.';
         }
-        $headers[] = 'Content-Type: application/json';
-        curl_setopt($ch, CURLOPT_POSTFIELDS, $body);
+        throw new RuntimeException('Hue-Dienst nicht erreichbar: ' . $message);
     }
 
-    curl_setopt($ch, CURLOPT_HTTPHEADER, $headers);
-
-    $response = curl_exec($ch);
-    if ($response === false) {
-        $error = curl_error($ch);
-        curl_close($ch);
-        throw new RuntimeException('Hue-Dienst nicht erreichbar: ' . $error);
+    $decoded = json_decode((string) $stdout, true);
+    if (!is_array($decoded)) {
+        throw new RuntimeException('Hue-Dienst lieferte ungültige Antwort.');
     }
 
-    $status = (int) curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
-    $contentType = curl_getinfo($ch, CURLINFO_CONTENT_TYPE) ?: '';
-    curl_close($ch);
-
-    if ($status >= 400) {
-        throw new RuntimeException('Hue-Dienst meldet HTTP ' . $status . ': ' . $response);
-    }
-
-    if (stripos($contentType, 'application/json') !== false) {
-        $decoded = json_decode($response, true);
-        if (!is_array($decoded)) {
-            throw new RuntimeException('Hue-Dienst lieferte ungültige JSON-Antwort.');
-        }
-        return $decoded;
-    }
-
-    return ['raw' => $response];
+    return $decoded;
 }
 
 function handle_ajax(string $configPath): void
@@ -334,7 +331,7 @@ function handle_ajax(string $configPath): void
                 if ($bridgeId === '') {
                     throw new RuntimeException('Es wurde keine Bridge ausgewählt.');
                 }
-                call_hue_service('/lights', 'GET', null, $bridgeId);
+                call_hue_cli(['test-connection', '--bridge-id', $bridgeId]);
                 respond_json(['ok' => true]);
                 break;
 
@@ -347,8 +344,9 @@ function handle_ajax(string $configPath): void
                 if (!in_array($type, ['lights', 'scenes', 'rooms'], true)) {
                     throw new RuntimeException('Unbekannter Ressourcentyp.');
                 }
-                $result = call_hue_service('/' . $type, 'GET', null, $bridgeId);
-                respond_json(['items' => $result]);
+                $result = call_hue_cli(['list-resources', '--type', $type, '--bridge-id', $bridgeId]);
+                $items = isset($result['items']) && is_array($result['items']) ? $result['items'] : [];
+                respond_json(['items' => $items]);
                 break;
 
             case 'light_command':
@@ -369,7 +367,15 @@ function handle_ajax(string $configPath): void
                     }
                     $body['brightness'] = $value;
                 }
-                call_hue_service('/lights/' . rawurlencode($lightId) . '/state', 'POST', $body, $bridgeId);
+                $args = ['light-command', '--bridge-id', $bridgeId, '--light-id', $lightId];
+                if (array_key_exists('on', $body)) {
+                    $args[] = $body['on'] ? '--on' : '--off';
+                }
+                if (array_key_exists('brightness', $body)) {
+                    $args[] = '--brightness';
+                    $args[] = (string) $body['brightness'];
+                }
+                call_hue_cli($args);
                 respond_json(['ok' => true]);
                 break;
 
@@ -385,7 +391,14 @@ function handle_ajax(string $configPath): void
                     $body['target_rid'] = (string) $payload['target_rid'];
                     $body['target_rtype'] = (string) $payload['target_rtype'];
                 }
-                call_hue_service('/scenes/' . rawurlencode($sceneId) . '/activate', 'POST', $body, $bridgeId);
+                $args = ['scene-command', '--bridge-id', $bridgeId, '--scene-id', $sceneId];
+                if (isset($body['target_rid'], $body['target_rtype'])) {
+                    $args[] = '--target-rid';
+                    $args[] = $body['target_rid'];
+                    $args[] = '--target-rtype';
+                    $args[] = $body['target_rtype'];
+                }
+                call_hue_cli($args);
                 respond_json(['ok' => true]);
                 break;
 
