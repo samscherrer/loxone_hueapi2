@@ -84,6 +84,22 @@ PHP-Proxy mit dem lokalen REST-Dienst. Damit entfällt die manuelle Eingabe eine
 Basis-URL. Anpassungen an Host oder Port erfolgen ausschließlich über die oben
 genannten Umgebungsvariablen.
 
+### TLS-Zertifikate der Hue Bridge
+
+Hue Bridges verwenden bei HTTPS-Verbindungen üblicherweise ein selbst signiertes
+Zertifikat. Standardmäßig prüft das Plugin dieses Zertifikat **nicht**, damit die
+Verbindung ohne zusätzlichen Pflegeaufwand funktioniert (`verify_tls = false`).
+Wenn du die Option „Zertifikat prüfen“ aktivierst und anschließend eine Meldung
+wie „Zertifikat konnte nicht verifiziert werden“ erhältst, stehen dir zwei
+Möglichkeiten offen:
+
+1. Deaktiviere die Zertifikatsprüfung in der Bridge-Konfiguration.
+2. Importiere das Stammzertifikat der Hue Bridge auf deinem LoxBerry und lasse die
+   Option aktiviert.
+
+Der Verbindungstest fängt TLS-Fehler jetzt ab und weist mit einer verständlichen
+Fehlermeldung auf diese beiden Optionen hin.
+
 ## Plugin-Paket für LoxBerry
 
 GitHub-Kompatibilität beschränkt die Bereitstellung fertiger ZIP-Archive in diesem

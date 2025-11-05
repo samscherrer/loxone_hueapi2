@@ -6,6 +6,7 @@ from typing import Any, Dict, Iterable, Optional
 
 import requests
 from requests import Response
+from requests import exceptions as requests_exc
 
 from .config import HueBridgeConfig
 
@@ -90,21 +91,36 @@ class HueBridgeClient:
         return [HueResource.from_api(item) for item in payload.get("data", [])]
 
     def _get(self, path: str) -> _JSON:
-        response = self._session.get(
-            f"{self._config.base_url}/{path}",
-            verify=self._config.verify_tls,
-            timeout=10,
-        )
+        response = self._request("GET", path)
         return self._handle_response(response)
 
     def _put(self, path: str, *, json: Optional[_JSON] = None) -> _JSON:
-        response = self._session.put(
-            f"{self._config.base_url}/{path}",
-            json=json,
-            verify=self._config.verify_tls,
-            timeout=10,
-        )
+        response = self._request("PUT", path, json=json)
         return self._handle_response(response)
+
+    def _request(self, method: str, path: str, *, json: Optional[_JSON] = None) -> Response:
+        url = f"{self._config.base_url}/{path}"
+        try:
+            return self._session.request(
+                method,
+                url,
+                json=json,
+                verify=self._config.verify_tls,
+                timeout=10,
+            )
+        except requests_exc.SSLError as exc:
+            if self._config.verify_tls:
+                hint = (
+                    "TLS-Handshake mit der Hue Bridge ist fehlgeschlagen: "
+                    "Zertifikat konnte nicht verifiziert werden. "
+                    "Deaktiviere die Zertifikatsprüfung in der Bridge-"
+                    "Konfiguration oder installiere das Hue-Stammzertifikat auf dem System."
+                )
+            else:
+                hint = "TLS-Handshake mit der Hue Bridge ist fehlgeschlagen."
+            raise HueBridgeError(hint) from exc
+        except requests_exc.RequestException as exc:  # pragma: no cover - defensive
+            raise HueBridgeError(f"Verbindung zur Hue Bridge fehlgeschlagen: {exc}") from exc
 
     def _handle_response(self, response: Response) -> _JSON:
         try:

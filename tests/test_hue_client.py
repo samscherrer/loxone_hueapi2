@@ -3,6 +3,8 @@ from typing import Dict
 import pytest
 import responses
 
+import requests
+
 from hue_plugin.config import HueBridgeConfig
 from hue_plugin.hue_client import HueBridgeClient, HueBridgeError
 
@@ -72,3 +74,28 @@ def test_set_light_state_validates(client: HueBridgeClient) -> None:
         body = body.decode()
     request_body: Dict[str, object] = json.loads(body)
     assert request_body == {"on": {"on": True}, "dimming": {"brightness": 50}}
+
+
+def test_get_lights_ssl_error(monkeypatch: pytest.MonkeyPatch, client: HueBridgeClient) -> None:
+    def raise_ssl(*args: object, **kwargs: object) -> None:
+        raise requests.exceptions.SSLError("certificate verify failed")
+
+    client._config.verify_tls = True
+    monkeypatch.setattr(client._session, "request", raise_ssl)
+
+    with pytest.raises(HueBridgeError) as excinfo:
+        list(client.get_lights())
+
+    assert "Zertifikat" in str(excinfo.value)
+
+
+def test_get_lights_request_error(monkeypatch: pytest.MonkeyPatch, client: HueBridgeClient) -> None:
+    def raise_request(*args: object, **kwargs: object) -> None:
+        raise requests.exceptions.ConnectionError("boom")
+
+    monkeypatch.setattr(client._session, "request", raise_request)
+
+    with pytest.raises(HueBridgeError) as excinfo:
+        list(client.get_lights())
+
+    assert "Verbindung zur Hue Bridge" in str(excinfo.value)
