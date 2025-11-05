@@ -149,20 +149,21 @@ parallel betreiben und deren Ressourcen sauber getrennt ansteuern.
 
 ### Szenen oder Lampen per HTTP-Request auslösen
 
-Für einfache Integrationen (z. B. über einen virtuellen Ausgang) kann Loxone die
-Authentifizierungs-geschützte Plugin-Seite direkt ansprechen. Beispiel zum Aktivieren bzw.
-Ausschalten einer Szene (Wert `1` aktiviert, Wert `0` schaltet den Zielbereich aus):
+Für einfache Integrationen (z. B. über einen virtuellen Ausgang) nutzt du den öffentlich
+erreichbaren Pfad unter `/plugins/<plugin-ordner>/index.php`. So vermeidest du zusätzliche
+HTTP-Authentifizierung auf `/admin/plugins/...`. Beispiel zum Aktivieren bzw. Ausschalten einer
+Szene (Wert `1` aktiviert, Wert `0` schaltet den Zielbereich aus):
 
 ```
-http://<loxberry-host>/admin/plugins/hueapiv2/index.php?ajax=1&action=scene_command&bridge_id=<bridge-id>&scene_id=<scene-rid>&state=1
+http://<loxberry-host>/plugins/hueapiv2/index.php?ajax=1&action=scene_command&bridge_id=<bridge-id>&scene_id=<scene-rid>&state=1
 ```
 
 Optional kannst du einen Zielraum oder eine Zone angeben (Parameter `target_rid` und
-`target_rtype`). Damit stellst du sicher, dass die Szene in dem gewünschten Bereich
-aktiviert bzw. beim Ausschalten vollständig deaktiviert wird:
+`target_rtype`). Damit stellst du sicher, dass die Szene in dem gewünschten Bereich aktiviert
+bzw. beim Ausschalten vollständig deaktiviert wird:
 
 ```
-http://<loxberry-host>/admin/plugins/hueapiv2/index.php?ajax=1&action=scene_command&bridge_id=<bridge-id>&scene_id=<scene-rid>&target_rid=<room-id>&target_rtype=room&state=0
+http://<loxberry-host>/plugins/hueapiv2/index.php?ajax=1&action=scene_command&bridge_id=<bridge-id>&scene_id=<scene-rid>&target_rid=<room-id>&target_rtype=room&state=0
 ```
 
 Das Plugin antwortet mit einer JSON-Struktur; ein erfolgreicher Aufruf liefert `{"ok": true}`.
@@ -170,7 +171,7 @@ Das Plugin antwortet mit einer JSON-Struktur; ein erfolgreicher Aufruf liefert `
 Zum Schalten einer Lampe steht derselbe Mechanismus bereit:
 
 ```
-http://<loxberry-host>/admin/plugins/hueapiv2/index.php?ajax=1&action=light_command&bridge_id=<bridge-id>&light_id=<light-rid>&on=1&brightness=75
+http://<loxberry-host>/plugins/hueapiv2/index.php?ajax=1&action=light_command&bridge_id=<bridge-id>&light_id=<light-rid>&on=1&brightness=75
 ```
 
 Der Parameter `on` akzeptiert `1` (EIN) oder `0` (AUS); `brightness` (0–100) ist optional und

@@ -619,6 +619,15 @@ if (isset($_GET['ajax']) || (isset($_GET['action']) && $_GET['action'] !== '')) 
     return;
 }
 
+$scriptName = $_SERVER['SCRIPT_NAME'] ?? '';
+$scriptDir = $scriptName !== '' ? dirname($scriptName) : '';
+$segments = array_values(array_filter(explode('/', trim($scriptDir, '/'))));
+$pluginFolder = end($segments);
+if (!is_string($pluginFolder) || $pluginFolder === '') {
+    $pluginFolder = 'hueapiv2';
+}
+$publicBasePath = '/plugins/' . $pluginFolder . '/index.php';
+
 header('Content-Type: text/html; charset=utf-8');
 ?>
 <!DOCTYPE html>
@@ -897,7 +906,7 @@ header('Content-Type: text/html; charset=utf-8');
       }
     </style>
   </head>
-  <body>
+  <body data-api-base="<?= htmlspecialchars($publicBasePath, ENT_QUOTES, 'UTF-8'); ?>">
     <header>
       <h1>Philips Hue API v2 Bridge</h1>
       <p>
@@ -1190,8 +1199,13 @@ header('Content-Type: text/html; charset=utf-8');
         el.style.display = text ? 'block' : 'none';
       };
 
-      const buildUrl = (action, params = {}) => {
-        const url = new URL('index.php', window.location.href);
+      const internalBase = new URL('index.php', window.location.href);
+      const publicBasePath = document.body.dataset.apiBase || internalBase.pathname;
+      const publicBase = new URL(publicBasePath, window.location.origin);
+
+      const buildUrl = (action, params = {}, options = {}) => {
+        const target = options.target === 'public' ? publicBase : internalBase;
+        const url = new URL(target.toString());
         url.searchParams.set('ajax', '1');
         url.searchParams.set('action', action);
         Object.entries(params).forEach(([key, value]) => {
@@ -1226,8 +1240,8 @@ header('Content-Type: text/html; charset=utf-8');
         }
         const offParams = { ...baseParams, on: '0' };
         renderHelperRows(lightCommandHelper, 'URLs für den virtuellen Ausgang (GET-Befehl in Loxone):', [
-          { label: 'Virtueller Ausgang – EIN (Wert 1):', url: buildUrl('light_command', onParams) },
-          { label: 'Virtueller Ausgang – AUS (Wert 0):', url: buildUrl('light_command', offParams) },
+          { label: 'Virtueller Ausgang – EIN (Wert 1):', url: buildUrl('light_command', onParams, { target: 'public' }) },
+          { label: 'Virtueller Ausgang – AUS (Wert 0):', url: buildUrl('light_command', offParams, { target: 'public' }) },
         ]);
       };
 
@@ -1270,8 +1284,8 @@ header('Content-Type: text/html; charset=utf-8');
         const onParams = { ...baseParams, state: '1' };
         const offParams = { ...baseParams, state: '0' };
         renderHelperRows(sceneCommandHelper, 'Nutze diese URLs im virtuellen Ausgang von Loxone:', [
-          { label: 'Virtueller Ausgang – EIN (Wert 1):', url: buildUrl('scene_command', onParams) },
-          { label: 'Virtueller Ausgang – AUS (Wert 0):', url: buildUrl('scene_command', offParams) },
+          { label: 'Virtueller Ausgang – EIN (Wert 1):', url: buildUrl('scene_command', onParams, { target: 'public' }) },
+          { label: 'Virtueller Ausgang – AUS (Wert 0):', url: buildUrl('scene_command', offParams, { target: 'public' }) },
         ]);
       };
 
