@@ -9,14 +9,32 @@ einen kleinen REST-Server lassen sich Lampen, Szenen und Räume abfragen sowie A
 
 * Abfrage von Hue-Lampen, -Szenen und -Räumen über die REST-Schnittstelle.
 * Aktivieren von Szenen und Setzen grundlegender Lampen-Parameter (Ein/Aus, Helligkeit).
+* Verwaltung mehrerer Hue Bridges samt Application-/Client-Key direkt in der Weboberfläche.
 * Konfigurationsdatei und Umgebungsvariable zur einfachen Anpassung auf dem LoxBerry.
 
 ## Vorbereitung
 
 1. Erzeuge bzw. erhalte einen **Application Key** für deine Hue Bridge über das
    offizielle Philips-Entwicklerportal.
-2. Trage IP-Adresse und Schlüssel in `config/config.json` ein oder setze die
-   Umgebungsvariable `HUE_PLUGIN_CONFIG` auf den Pfad einer eigenen Datei.
+2. Trage deine Bridges in `config/config.json` ein oder setze die Umgebungsvariable
+   `HUE_PLUGIN_CONFIG` auf den Pfad einer eigenen Datei.
+   Das JSON unterstützt mehrere Einträge unter `bridges`:
+
+   ```json
+   {
+     "bridges": [
+       {
+         "id": "wohnzimmer",
+         "name": "Wohnzimmer",
+         "bridge_ip": "192.168.1.50",
+         "application_key": "<dein-app-key>",
+         "client_key": null,
+         "use_https": true,
+         "verify_tls": false
+       }
+     ]
+   }
+   ```
 3. Installiere die Python-Abhängigkeiten (z. B. innerhalb eines Virtual Environments):
 
    ```bash
@@ -37,11 +55,11 @@ mit der Hue Bridge interagieren:
 
 | Methode | Pfad                         | Beschreibung                           |
 |---------|------------------------------|----------------------------------------|
-| GET     | `/lights`                    | Liste aller Lampen                     |
+| GET     | `/lights?bridge_id=<id>`     | Liste aller Lampen                     |
 | POST    | `/lights/{id}/state`         | Licht schalten / dimmen                |
-| GET     | `/scenes`                    | Liste aller Szenen                     |
+| GET     | `/scenes?bridge_id=<id>`     | Liste aller Szenen                     |
 | POST    | `/scenes/{id}/activate`      | Szene aktivieren                       |
-| GET     | `/rooms`                     | Liste aller Räume (Areas/Zonen)        |
+| GET     | `/rooms?bridge_id=<id>`      | Liste aller Räume (Areas/Zonen)        |
 
 ## Weboberfläche im LoxBerry
 
@@ -49,6 +67,7 @@ Nach der Installation erscheint das Plugin in der LoxBerry-Systemsteuerung. Beim
 Aufruf wird automatisch die Datei `webfrontend/html/index.php` geladen, die die
 grafische Oberfläche ausliefert. Dort kannst du
 
+* Hue Bridges samt Application-Key anlegen, bearbeiten und zwischen ihnen wechseln,
 * die Verbindung zum lokalen REST-Dienst testen,
 * Lampen, Räume und Szenen direkt auslesen,
 * sowie einzelne Lampen oder Szenen zum Testen schalten.

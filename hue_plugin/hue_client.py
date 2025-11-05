@@ -7,7 +7,7 @@ from typing import Any, Dict, Iterable, Optional
 import requests
 from requests import Response
 
-from .config import HueConfig
+from .config import HueBridgeConfig
 
 _JSON = Dict[str, Any]
 
@@ -34,7 +34,7 @@ class HueResource:
 class HueBridgeClient:
     """Wrapper around the Hue REST API v2."""
 
-    def __init__(self, config: HueConfig) -> None:
+    def __init__(self, config: HueBridgeConfig) -> None:
         self._config = config
         self._session = requests.Session()
         self._session.headers.update({"hue-application-key": config.application_key})

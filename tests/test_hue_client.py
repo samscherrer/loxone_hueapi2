@@ -3,13 +3,14 @@ from typing import Dict
 import pytest
 import responses
 
-from hue_plugin.config import HueConfig
+from hue_plugin.config import HueBridgeConfig
 from hue_plugin.hue_client import HueBridgeClient, HueBridgeError
 
 
 @pytest.fixture()
 def client() -> HueBridgeClient:
-    config = HueConfig(
+    config = HueBridgeConfig(
+        id="test",
         bridge_ip="1.2.3.4",
         application_key="key",
         use_https=False,

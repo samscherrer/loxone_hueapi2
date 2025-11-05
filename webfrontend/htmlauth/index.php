@@ -92,6 +92,7 @@ header('Content-Type: text/html; charset=utf-8');
         border: 1px solid rgba(0, 0, 0, 0.2);
         background: rgba(255, 255, 255, 0.92);
         transition: border 0.2s ease, box-shadow 0.2s ease;
+        color: #0f172a;
       }
 
       input:focus,
@@ -100,6 +101,11 @@ header('Content-Type: text/html; charset=utf-8');
         outline: none;
         border-color: var(--accent);
         box-shadow: 0 0 0 3px var(--accent-light);
+      }
+
+      input::placeholder,
+      textarea::placeholder {
+        color: rgba(15, 23, 42, 0.55);
       }
 
       button {
@@ -116,6 +122,11 @@ header('Content-Type: text/html; charset=utf-8');
       button.secondary {
         background: rgba(16, 25, 53, 0.08);
         color: var(--accent);
+      }
+
+      button.danger {
+        background: rgba(185, 28, 28, 0.15);
+        color: #991b1b;
       }
 
       button:hover {
@@ -203,6 +214,58 @@ header('Content-Type: text/html; charset=utf-8');
         font-size: 0.9rem;
       }
 
+      .form-checks {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.75rem;
+        margin-top: 0.75rem;
+      }
+
+      .form-checks label {
+        font-weight: 500;
+        display: inline-flex;
+        align-items: center;
+        gap: 0.45rem;
+        margin: 0;
+      }
+
+      .form-checks input[type="checkbox"] {
+        width: auto;
+        accent-color: var(--accent);
+        transform: scale(1.1);
+      }
+
+      .bridge-items {
+        list-style: none;
+        padding: 0;
+        margin: 0.75rem 0 0;
+        display: flex;
+        flex-direction: column;
+        gap: 0.5rem;
+      }
+
+      .bridge-item {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 0.6rem 0.75rem;
+        border-radius: 10px;
+        background: rgba(15, 23, 42, 0.05);
+      }
+
+      .bridge-item strong {
+        color: var(--accent);
+      }
+
+      .bridge-actions {
+        display: flex;
+        gap: 0.5rem;
+      }
+
+      button[hidden] {
+        display: none;
+      }
+
       footer {
         margin-top: 2rem;
         color: rgba(255, 255, 255, 0.7);
@@ -218,12 +281,75 @@ header('Content-Type: text/html; charset=utf-8');
       </p>
     </header>
     <main>
+      <section class="card" id="bridge-card">
+        <h2>Hue Bridges verwalten</h2>
+        <p class="muted">
+          Hinterlege hier die IP-Adresse und den <em>application key</em> deiner Philips
+          Hue Bridges. Du kannst mehrere Bridges anlegen und später im Interface
+          auswählen.
+        </p>
+        <div id="bridge-list" class="muted">Bridges werden geladen …</div>
+        <form id="bridge-form" class="grid">
+          <input id="bridge-id" type="hidden" />
+          <div class="grid two">
+            <div>
+              <label for="bridge-name">Anzeigename</label>
+              <input id="bridge-name" type="text" placeholder="z. B. Wohnzimmer" />
+            </div>
+            <div>
+              <label for="bridge-ip">Bridge-Adresse</label>
+              <input
+                id="bridge-ip"
+                type="text"
+                placeholder="192.168.1.50 oder bridge.local"
+                required
+              />
+            </div>
+          </div>
+          <label for="bridge-app-key">Hue Application Key</label>
+          <input
+            id="bridge-app-key"
+            type="text"
+            placeholder="Hue App Key (z. B. 40 Zeichen)"
+            required
+          />
+          <label for="bridge-client-key">Hue Client Key (optional)</label>
+          <input
+            id="bridge-client-key"
+            type="text"
+            placeholder="Nur für Entertainment-Verbindungen erforderlich"
+          />
+          <div class="form-checks">
+            <label>
+              <input id="bridge-use-https" type="checkbox" checked />
+              HTTPS verwenden
+            </label>
+            <label>
+              <input id="bridge-verify-tls" type="checkbox" />
+              TLS-Zertifikate prüfen
+            </label>
+          </div>
+          <div class="actions">
+            <button type="submit" id="bridge-save">Bridge speichern</button>
+            <button type="button" id="bridge-reset" class="secondary">
+              Formular leeren
+            </button>
+            <button type="button" id="bridge-delete" class="danger" hidden>
+              Bridge entfernen
+            </button>
+          </div>
+          <div id="bridge-message" class="message"></div>
+        </form>
+      </section>
+
       <section class="card" id="connection-card">
         <h2>Verbindung zur Bridge-API</h2>
         <p class="muted">
           Der Bridge-Dienst läuft standardmäßig auf Port <strong>5510</strong> desselben
           LoxBerry-Systems. Passe die Adresse an, falls du sie verändert hast.
         </p>
+        <label for="bridge-select">Aktive Hue Bridge</label>
+        <select id="bridge-select"></select>
         <label for="base-url">Basis-URL</label>
         <input id="base-url" type="text" placeholder="http://loxberry:5510" />
         <div class="actions">
@@ -244,6 +370,7 @@ header('Content-Type: text/html; charset=utf-8');
           <button data-endpoint="rooms" class="load-resource">Räume</button>
           <button data-endpoint="scenes" class="load-resource">Szenen</button>
         </div>
+        <div id="resource-message" class="message"></div>
         <div id="resource-output">
           <table>
             <thead>
@@ -321,9 +448,33 @@ header('Content-Type: text/html; charset=utf-8');
 
     <script>
       const baseUrlInput = document.getElementById("base-url");
+      const bridgeSelect = document.getElementById("bridge-select");
+      const bridgeList = document.getElementById("bridge-list");
+      const bridgeForm = document.getElementById("bridge-form");
+      const bridgeIdField = document.getElementById("bridge-id");
+      const bridgeNameInput = document.getElementById("bridge-name");
+      const bridgeIpInput = document.getElementById("bridge-ip");
+      const bridgeAppKeyInput = document.getElementById("bridge-app-key");
+      const bridgeClientKeyInput = document.getElementById("bridge-client-key");
+      const bridgeUseHttpsInput = document.getElementById("bridge-use-https");
+      const bridgeVerifyTlsInput = document.getElementById("bridge-verify-tls");
+      const bridgeMessage = document.getElementById("bridge-message");
+      const bridgeDeleteButton = document.getElementById("bridge-delete");
+      const bridgeResetButton = document.getElementById("bridge-reset");
+      const connectionMessage = document.getElementById("connection-message");
+      const resourceMessage = document.getElementById("resource-message");
+      const lightMessage = document.getElementById("light-message");
+      const sceneMessage = document.getElementById("scene-message");
+
+      let bridges = [];
+      let activeBridgeId = null;
+
       const message = (el, type, text) => {
+        if (!el) {
+          return;
+        }
         el.textContent = text;
-        el.className = `message ${type}`;
+        el.className = type ? `message ${type}` : "message";
         el.style.display = text ? "block" : "none";
       };
 
@@ -343,35 +494,259 @@ header('Content-Type: text/html; charset=utf-8');
         return base.replace(/\/$/, "");
       };
 
-      const fetchJson = async (path, options = {}) => {
-        const response = await fetch(`${getBaseUrl()}${path}`, {
+      const apiFetch = async (
+        path,
+        { method = "GET", body, includeBridge = false } = {}
+      ) => {
+        const url = new URL(`${getBaseUrl()}${path}`);
+        if (includeBridge && activeBridgeId) {
+          url.searchParams.set("bridge_id", activeBridgeId);
+        }
+        const options = {
+          method,
           headers: { "Content-Type": "application/json" },
-          ...options,
-        });
+        };
+        if (body !== undefined) {
+          options.body = typeof body === "string" ? body : JSON.stringify(body);
+        }
+        const response = await fetch(url.toString(), options);
         if (!response.ok) {
-          const body = await response.text();
-          throw new Error(`HTTP ${response.status}: ${body}`);
+          const details = await response.text();
+          throw new Error(
+            `HTTP ${response.status}: ${details || response.statusText}`
+          );
         }
         if (response.status === 204) {
           return null;
         }
-        return response.json();
+        const contentType = response.headers.get("content-type") || "";
+        if (contentType.includes("application/json")) {
+          return response.json();
+        }
+        return response.text();
       };
 
-      document.getElementById("test-connection").addEventListener("click", async () => {
-        const el = document.getElementById("connection-message");
-        message(el, "", "");
+      const hueFetch = (path, options = {}) =>
+        apiFetch(path, { includeBridge: true, ...options });
+
+      const ensureBridgeSelected = (targetMessage) => {
+        if (!activeBridgeId) {
+          message(
+            targetMessage,
+            "error",
+            "Bitte lege zuerst eine Hue Bridge an und wähle sie aus."
+          );
+          return false;
+        }
+        return true;
+      };
+
+      const renderBridgeSelect = () => {
+        bridgeSelect.innerHTML = "";
+        if (!bridges.length) {
+          bridgeSelect.disabled = true;
+          const option = document.createElement("option");
+          option.textContent = "Keine Bridge konfiguriert";
+          option.disabled = true;
+          option.value = "";
+          option.selected = true;
+          bridgeSelect.appendChild(option);
+          return;
+        }
+        bridgeSelect.disabled = false;
+        bridges.forEach((bridge) => {
+          const option = document.createElement("option");
+          option.value = bridge.id;
+          option.textContent = bridge.name
+            ? `${bridge.name} (${bridge.id})`
+            : bridge.id;
+          if (bridge.id === activeBridgeId) {
+            option.selected = true;
+          }
+          bridgeSelect.appendChild(option);
+        });
+      };
+
+      const renderBridgeList = () => {
+        if (!bridges.length) {
+          bridgeList.innerHTML =
+            "<p class=\"muted\">Noch keine Bridge hinterlegt. Nutze das Formular, um eine Verbindung anzulegen.</p>";
+          return;
+        }
+        const list = document.createElement("ul");
+        list.className = "bridge-items";
+        bridges.forEach((bridge) => {
+          const item = document.createElement("li");
+          item.className = "bridge-item";
+          const info = document.createElement("div");
+          info.innerHTML = `<strong>${bridge.name || bridge.id}</strong><br /><span class="muted">${bridge.bridge_ip}</span>`;
+          const actions = document.createElement("div");
+          actions.className = "bridge-actions";
+
+          const editButton = document.createElement("button");
+          editButton.type = "button";
+          editButton.className = "secondary";
+          editButton.textContent = "Bearbeiten";
+          editButton.addEventListener("click", () => fillBridgeForm(bridge.id));
+          actions.appendChild(editButton);
+
+          if (bridge.id === activeBridgeId) {
+            const activeTag = document.createElement("span");
+            activeTag.className = "tag";
+            activeTag.textContent = "Aktiv";
+            actions.appendChild(activeTag);
+          } else {
+            const activateButton = document.createElement("button");
+            activateButton.type = "button";
+            activateButton.className = "secondary";
+            activateButton.textContent = "Aktiv setzen";
+            activateButton.addEventListener("click", () =>
+              setActiveBridge(bridge.id)
+            );
+            actions.appendChild(activateButton);
+          }
+
+          item.append(info, actions);
+          list.appendChild(item);
+        });
+        bridgeList.innerHTML = "";
+        bridgeList.appendChild(list);
+      };
+
+      const setActiveBridge = (bridgeId) => {
+        activeBridgeId = bridgeId;
+        renderBridgeSelect();
+        renderBridgeList();
+        if (bridgeSelect.value !== bridgeId) {
+          bridgeSelect.value = bridgeId;
+        }
+      };
+
+      const fillBridgeForm = (bridgeId) => {
+        const bridge = bridges.find((b) => b.id === bridgeId);
+        if (!bridge) {
+          return;
+        }
+        bridgeIdField.value = bridge.id;
+        bridgeNameInput.value = bridge.name || "";
+        bridgeIpInput.value = bridge.bridge_ip || "";
+        bridgeAppKeyInput.value = bridge.application_key || "";
+        bridgeClientKeyInput.value = bridge.client_key || "";
+        bridgeUseHttpsInput.checked = Boolean(bridge.use_https);
+        bridgeVerifyTlsInput.checked = Boolean(bridge.verify_tls);
+        bridgeDeleteButton.hidden = false;
+        message(bridgeMessage, "", "");
+      };
+
+      const resetBridgeForm = () => {
+        bridgeForm.reset();
+        bridgeIdField.value = "";
+        bridgeUseHttpsInput.checked = true;
+        bridgeVerifyTlsInput.checked = false;
+        bridgeDeleteButton.hidden = true;
+        message(bridgeMessage, "", "");
+      };
+
+      bridgeResetButton.addEventListener("click", (event) => {
+        event.preventDefault();
+        resetBridgeForm();
+      });
+
+      bridgeDeleteButton.addEventListener("click", async () => {
+        const bridgeId = bridgeIdField.value;
+        if (!bridgeId) {
+          return;
+        }
+        if (
+          !window.confirm(
+            `Bridge '${bridgeId}' wirklich entfernen? Diese Aktion kann nicht rückgängig gemacht werden.`
+          )
+        ) {
+          return;
+        }
         try {
-          await fetchJson("/lights", { method: "GET" });
-          message(el, "success", "Verbindung erfolgreich getestet.");
+          await apiFetch(`/config/bridges/${encodeURIComponent(bridgeId)}`, {
+            method: "DELETE",
+          });
+          message(bridgeMessage, "success", "Bridge wurde entfernt.");
+          await loadBridges();
+          resetBridgeForm();
         } catch (error) {
-          message(el, "error", `Verbindung fehlgeschlagen: ${error.message}`);
+          message(bridgeMessage, "error", error.message);
         }
       });
 
-      document.getElementById("open-docs").addEventListener("click", () => {
-        window.open(`${getBaseUrl()}/docs`, "_blank", "noopener");
+      bridgeForm.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        const bridgeId = bridgeIdField.value.trim() || null;
+        const payload = {
+          name: bridgeNameInput.value.trim() || null,
+          bridge_ip: bridgeIpInput.value.trim(),
+          application_key: bridgeAppKeyInput.value.trim(),
+          client_key: bridgeClientKeyInput.value.trim() || null,
+          use_https: bridgeUseHttpsInput.checked,
+          verify_tls: bridgeVerifyTlsInput.checked,
+        };
+        if (!payload.bridge_ip || !payload.application_key) {
+          message(
+            bridgeMessage,
+            "error",
+            "Bitte gib sowohl die Bridge-Adresse als auch den Application Key an."
+          );
+          return;
+        }
+        try {
+          if (bridgeId) {
+            await apiFetch(`/config/bridges/${encodeURIComponent(bridgeId)}`, {
+              method: "PUT",
+              body: payload,
+            });
+            message(bridgeMessage, "success", "Bridge wurde aktualisiert.");
+          } else {
+            await apiFetch("/config/bridges", {
+              method: "POST",
+              body: { ...payload, id: null },
+            });
+            message(bridgeMessage, "success", "Neue Bridge wurde angelegt.");
+          }
+          await loadBridges();
+          if (!bridgeId) {
+            resetBridgeForm();
+          }
+        } catch (error) {
+          message(bridgeMessage, "error", error.message);
+        }
       });
+
+      bridgeSelect.addEventListener("change", (event) => {
+        setActiveBridge(event.target.value);
+      });
+
+      const loadBridges = async () => {
+        try {
+          const data = await apiFetch("/config/bridges");
+          bridges = Array.isArray(data) ? data : [];
+          if (!bridges.length) {
+            activeBridgeId = null;
+          } else if (
+            !activeBridgeId ||
+            !bridges.some((b) => b.id === activeBridgeId)
+          ) {
+            activeBridgeId = bridges[0].id;
+          }
+          renderBridgeSelect();
+          renderBridgeList();
+          if (activeBridgeId) {
+            bridgeSelect.value = activeBridgeId;
+          }
+        } catch (error) {
+          message(bridgeMessage, "error", error.message);
+          bridges = [];
+          activeBridgeId = null;
+          renderBridgeSelect();
+          renderBridgeList();
+        }
+      };
 
       const renderResources = (items) => {
         const tbody = document
@@ -409,54 +784,93 @@ header('Content-Type: text/html; charset=utf-8');
         document.querySelector("#resource-output tbody").replaceWith(tbody);
       };
 
+      document.getElementById("test-connection").addEventListener("click", async () => {
+        message(connectionMessage, "", "");
+        if (!ensureBridgeSelected(connectionMessage)) {
+          return;
+        }
+        try {
+          await hueFetch("/lights", { method: "GET" });
+          message(connectionMessage, "success", "Verbindung erfolgreich getestet.");
+        } catch (error) {
+          message(
+            connectionMessage,
+            "error",
+            `Verbindung fehlgeschlagen: ${error.message}`
+          );
+        }
+      });
+
+      document.getElementById("open-docs").addEventListener("click", () => {
+        window.open(`${getBaseUrl()}/docs`, "_blank", "noopener");
+      });
+
       document.querySelectorAll(".load-resource").forEach((button) => {
         button.addEventListener("click", async () => {
+          message(resourceMessage, "", "");
+          if (!ensureBridgeSelected(resourceMessage)) {
+            return;
+          }
           const endpoint = button.getAttribute("data-endpoint");
           try {
-            const data = await fetchJson(`/${endpoint}`);
+            const data = await hueFetch(`/${endpoint}`);
             renderResources(data);
           } catch (error) {
-            alert(`Fehler beim Laden: ${error.message}`);
+            message(
+              resourceMessage,
+              "error",
+              `Fehler beim Laden: ${error.message}`
+            );
           }
         });
       });
 
       document.getElementById("light-submit").addEventListener("click", async () => {
-        const el = document.getElementById("light-message");
-        message(el, "", "");
+        message(lightMessage, "", "");
+        if (!ensureBridgeSelected(lightMessage)) {
+          return;
+        }
         const lightId = document.getElementById("light-id").value.trim();
         if (!lightId) {
-          message(el, "error", "Bitte eine Lampen-RID angeben.");
+          message(lightMessage, "error", "Bitte eine Lampen-RID angeben.");
           return;
         }
         const action = document.getElementById("light-action").value;
-        const brightnessRaw = document.getElementById("light-brightness").value.trim();
+        const brightnessRaw = document
+          .getElementById("light-brightness")
+          .value.trim();
         const payload = { on: action === "on" };
         if (brightnessRaw !== "") {
           const value = Number.parseInt(brightnessRaw, 10);
           if (Number.isNaN(value) || value < 0 || value > 100) {
-            message(el, "error", "Helligkeit muss zwischen 0 und 100 liegen.");
+            message(
+              lightMessage,
+              "error",
+              "Helligkeit muss zwischen 0 und 100 liegen."
+            );
             return;
           }
           payload.brightness = value;
         }
         try {
-          await fetchJson(`/lights/${encodeURIComponent(lightId)}/state`, {
+          await hueFetch(`/lights/${encodeURIComponent(lightId)}/state`, {
             method: "POST",
-            body: JSON.stringify(payload),
+            body: payload,
           });
-          message(el, "success", "Befehl wurde an die Bridge gesendet.");
+          message(lightMessage, "success", "Befehl wurde an die Bridge gesendet.");
         } catch (error) {
-          message(el, "error", `Aktion fehlgeschlagen: ${error.message}`);
+          message(lightMessage, "error", `Aktion fehlgeschlagen: ${error.message}`);
         }
       });
 
       document.getElementById("scene-submit").addEventListener("click", async () => {
-        const el = document.getElementById("scene-message");
-        message(el, "", "");
+        message(sceneMessage, "", "");
+        if (!ensureBridgeSelected(sceneMessage)) {
+          return;
+        }
         const sceneId = document.getElementById("scene-id").value.trim();
         if (!sceneId) {
-          message(el, "error", "Bitte eine Szenen-RID angeben.");
+          message(sceneMessage, "error", "Bitte eine Szenen-RID angeben.");
           return;
         }
         const targetValue = document.getElementById("scene-target").value.trim();
@@ -465,7 +879,7 @@ header('Content-Type: text/html; charset=utf-8');
           const [rid, rtype] = targetValue.split("::");
           if (!rid || !rtype) {
             message(
-              el,
+              sceneMessage,
               "error",
               "Bitte Ziel im Format <resource-id>::<rtype> angeben."
             );
@@ -475,15 +889,17 @@ header('Content-Type: text/html; charset=utf-8');
           payload.target_rtype = rtype;
         }
         try {
-          await fetchJson(`/scenes/${encodeURIComponent(sceneId)}/activate`, {
+          await hueFetch(`/scenes/${encodeURIComponent(sceneId)}/activate`, {
             method: "POST",
-            body: JSON.stringify(payload),
+            body: payload,
           });
-          message(el, "success", "Szene wurde angefordert.");
+          message(sceneMessage, "success", "Szene wurde angefordert.");
         } catch (error) {
-          message(el, "error", `Aktion fehlgeschlagen: ${error.message}`);
+          message(sceneMessage, "error", `Aktion fehlgeschlagen: ${error.message}`);
         }
       });
+
+      loadBridges();
     </script>
   </body>
 </html>
