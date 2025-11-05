@@ -61,6 +61,13 @@ mit der Hue Bridge interagieren:
 | POST    | `/scenes/{id}/activate`      | Szene aktivieren                       |
 | GET     | `/rooms?bridge_id=<id>`      | Liste aller Räume (Areas/Zonen)        |
 
+Die LoxBerry-Weboberfläche ruft den Dienst typischerweise vom gleichen Host unter
+`http://<dein-loxberry>:5510` auf. Falls du einen anderen Hostnamen oder zusätzliche
+Clients zulassen möchtest, kannst du die erlaubten CORS-Ursprünge über die
+Umgebungsvariable `HUE_PLUGIN_ALLOW_ORIGINS` (kommagetrennte Liste von URLs) steuern.
+Ohne Angabe werden alle Ursprünge akzeptiert, damit die Oberfläche auch ohne weitere
+Konfiguration funktioniert.
+
 ## Weboberfläche im LoxBerry
 
 Nach der Installation erscheint das Plugin in der LoxBerry-Systemsteuerung. Beim

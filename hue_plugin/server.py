@@ -1,9 +1,11 @@
 """FastAPI application exposing Hue resources to Loxone."""
 from __future__ import annotations
 
+import os
 from typing import Dict, Iterable, Optional
 
 from fastapi import Body, Depends, FastAPI, HTTPException, Query, status
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
 from .config import (
@@ -17,6 +19,20 @@ from .config import (
 from .hue_client import HueBridgeClient, HueBridgeError, HueResource
 
 app = FastAPI(title="LoxBerry Hue API v2 bridge")
+
+_allowed_origins_env = os.getenv("HUE_PLUGIN_ALLOW_ORIGINS", "")
+if _allowed_origins_env:
+    allowed_origins = [origin.strip() for origin in _allowed_origins_env.split(",") if origin.strip()]
+else:
+    allowed_origins = ["*"]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=allowed_origins,
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 class LightStateRequest(BaseModel):
