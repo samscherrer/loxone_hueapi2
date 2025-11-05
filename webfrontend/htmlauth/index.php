@@ -3,7 +3,10 @@ declare(strict_types=1);
 
 header('X-Content-Type-Options: nosniff');
 
-function respond_json(mixed $payload, int $status = 200): void
+/**
+ * @param mixed $payload
+ */
+function respond_json($payload, int $status = 200): void
 {
     if (!headers_sent()) {
         http_response_code($status);
@@ -150,7 +153,12 @@ function generate_bridge_id(array $entry, array $existing): string
         $base = 'default';
     }
 
-    $ids = array_map(static fn(array $item): string => $item['id'], $existing);
+    $ids = array_map(
+        function (array $item): string {
+            return $item['id'];
+        },
+        $existing
+    );
     if (!in_array($base, $ids, true)) {
         return $base;
     }
@@ -194,7 +202,7 @@ function call_hue_service(string $path, string $method = 'GET', ?array $payload 
     $url = rtrim($base, '/') . $path;
 
     if ($bridgeId !== null && $bridgeId !== '') {
-        $separator = str_contains($url, '?') ? '&' : '?';
+        $separator = strpos($url, '?') !== false ? '&' : '?';
         $url .= $separator . http_build_query(['bridge_id' => $bridgeId]);
     }
 
@@ -286,7 +294,9 @@ function handle_ajax(string $configPath): void
                 $updated = false;
                 foreach ($bridges as $index => $existing) {
                     if ($identifier !== null && $existing['id'] === $identifier) {
-                        $bridges[$index] = normalise_bridge($bridge, array_diff_key($bridges, [$index => true]));
+                        $existingWithoutCurrent = $bridges;
+                        unset($existingWithoutCurrent[$index]);
+                        $bridges[$index] = normalise_bridge($bridge, array_values($existingWithoutCurrent));
                         $bridgeResponse = $bridges[$index];
                         $updated = true;
                         break;
@@ -311,7 +321,9 @@ function handle_ajax(string $configPath): void
                 $config = load_plugin_config($configPath);
                 $bridges = array_values(array_filter(
                     $config['bridges'],
-                    static fn(array $bridge): bool => $bridge['id'] !== $identifier
+                    function (array $bridge) use ($identifier): bool {
+                        return $bridge['id'] !== $identifier;
+                    }
                 ));
                 save_plugin_config($configPath, ['bridges' => $bridges]);
                 respond_json(['ok' => true]);
