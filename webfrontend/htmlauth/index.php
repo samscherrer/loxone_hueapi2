@@ -1,399 +1,5 @@
 <?php
 declare(strict_types=1);
-
-header('X-Content-Type-Options: nosniff');
-
-function respond_json(mixed $payload, int $status = 200): void
-{
-    if (!headers_sent()) {
-        http_response_code($status);
-        header('Content-Type: application/json; charset=utf-8');
-    }
-    echo json_encode($payload, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
-    exit;
-}
-
-function respond_error(string $message, int $status = 400): void
-{
-    respond_json(['error' => $message], $status);
-}
-
-function plugin_config_path(): string
-{
-    $configDir = getenv('LBPCONFIGDIR');
-    if (!$configDir) {
-        $configDir = dirname(__DIR__, 2) . '/config';
-    }
-
-    return rtrim($configDir, DIRECTORY_SEPARATOR) . '/config.json';
-}
-
-function load_plugin_config(string $configPath): array
-{
-    if (!file_exists($configPath)) {
-        return ['bridges' => []];
-    }
-
-    $raw = file_get_contents($configPath);
-    if ($raw === false) {
-        throw new RuntimeException("Konfigurationsdatei konnte nicht gelesen werden.");
-    }
-
-    $raw = trim($raw);
-    if ($raw === '') {
-        return ['bridges' => []];
-    }
-
-    $decoded = json_decode($raw, true);
-    if (!is_array($decoded)) {
-        throw new RuntimeException('Ungültige Konfigurationsdatei.');
-    }
-
-    if (isset($decoded['bridges']) && is_array($decoded['bridges'])) {
-        $bridges = [];
-        foreach ($decoded['bridges'] as $entry) {
-            if (!is_array($entry)) {
-                continue;
-            }
-            $bridges[] = normalise_bridge($entry, $bridges);
-        }
-        return ['bridges' => $bridges];
-    }
-
-    if (isset($decoded['bridge_ip'], $decoded['application_key'])) {
-        $bridge = normalise_bridge($decoded, []);
-        return ['bridges' => [$bridge]];
-    }
-
-    return ['bridges' => []];
-}
-
-function save_plugin_config(string $configPath, array $config): void
-{
-    $bridges = $config['bridges'] ?? [];
-    if (!is_array($bridges)) {
-        throw new RuntimeException('Bridge-Liste ist ungültig.');
-    }
-
-    $dir = dirname($configPath);
-    if (!is_dir($dir)) {
-        if (!mkdir($dir, 0775, true) && !is_dir($dir)) {
-            throw new RuntimeException('Konfigurationsverzeichnis konnte nicht erstellt werden.');
-        }
-    }
-
-    $payload = json_encode(['bridges' => array_values($bridges)], JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
-    if ($payload === false) {
-        throw new RuntimeException('Konfiguration konnte nicht serialisiert werden.');
-    }
-    $payload .= "\n";
-
-    $tmpPath = $configPath . '.tmp';
-    if (file_put_contents($tmpPath, $payload, LOCK_EX) === false) {
-        throw new RuntimeException('Konfigurationsdatei konnte nicht geschrieben werden.');
-    }
-    if (!rename($tmpPath, $configPath)) {
-        throw new RuntimeException('Konfigurationsdatei konnte nicht aktualisiert werden.');
-    }
-}
-
-function normalise_bridge(array $entry, array $existing): array
-{
-    $id = $entry['id'] ?? '';
-    if (!is_string($id) || $id === '') {
-        $id = generate_bridge_id($entry, $existing);
-    }
-
-    $name = isset($entry['name']) && $entry['name'] !== '' ? (string) $entry['name'] : null;
-    $bridgeIp = (string) ($entry['bridge_ip'] ?? '');
-    $appKey = (string) ($entry['application_key'] ?? '');
-    $clientKey = isset($entry['client_key']) && $entry['client_key'] !== '' ? (string) $entry['client_key'] : null;
-    $useHttps = filter_var($entry['use_https'] ?? true, FILTER_VALIDATE_BOOLEAN, FILTER_NULL_ON_FAILURE);
-    if ($useHttps === null) {
-        $useHttps = true;
-    }
-    $verifyTls = filter_var($entry['verify_tls'] ?? false, FILTER_VALIDATE_BOOLEAN, FILTER_NULL_ON_FAILURE);
-    if ($verifyTls === null) {
-        $verifyTls = false;
-    }
-
-    return [
-        'id' => $id,
-        'name' => $name,
-        'bridge_ip' => $bridgeIp,
-        'application_key' => $appKey,
-        'client_key' => $clientKey,
-        'use_https' => $useHttps,
-        'verify_tls' => $verifyTls,
-    ];
-}
-
-function generate_bridge_id(array $entry, array $existing): string
-{
-    $candidates = [];
-    if (isset($entry['name']) && is_string($entry['name'])) {
-        $candidates[] = $entry['name'];
-    }
-    if (isset($entry['bridge_ip']) && is_string($entry['bridge_ip'])) {
-        $candidates[] = $entry['bridge_ip'];
-    }
-
-    $base = null;
-    foreach ($candidates as $value) {
-        $slug = slugify($value);
-        if ($slug) {
-            $base = $slug;
-            break;
-        }
-    }
-    if (!$base) {
-        $base = 'default';
-    }
-
-    $ids = array_map(static fn(array $item): string => $item['id'], $existing);
-    if (!in_array($base, $ids, true)) {
-        return $base;
-    }
-
-    $counter = 1;
-    while (in_array(sprintf('%s-%d', $base, $counter), $ids, true)) {
-        $counter++;
-    }
-
-    return sprintf('%s-%d', $base, $counter);
-}
-
-function slugify(string $value): string
-{
-    $value = strtolower(trim($value));
-    $value = preg_replace('/[^a-z0-9]+/', '-', $value) ?? '';
-    return trim($value, '-');
-}
-
-function read_json_body(): array
-{
-    $raw = file_get_contents('php://input');
-    if ($raw === false || $raw === '') {
-        return [];
-    }
-    $decoded = json_decode($raw, true);
-    if (!is_array($decoded)) {
-        throw new RuntimeException('Ungültiger JSON-Body.');
-    }
-    return $decoded;
-}
-
-function call_hue_service(string $path, string $method = 'GET', ?array $payload = null, ?string $bridgeId = null): array
-{
-    $base = getenv('HUE_PLUGIN_SERVICE_BASE');
-    if (!$base) {
-        $host = getenv('HUE_PLUGIN_SERVICE_HOST') ?: '127.0.0.1';
-        $port = getenv('HUE_PLUGIN_SERVICE_PORT') ?: '5510';
-        $base = sprintf('http://%s:%s', $host, $port);
-    }
-    $url = rtrim($base, '/') . $path;
-
-    if ($bridgeId !== null && $bridgeId !== '') {
-        $separator = str_contains($url, '?') ? '&' : '?';
-        $url .= $separator . http_build_query(['bridge_id' => $bridgeId]);
-    }
-
-    $ch = curl_init($url);
-    if ($ch === false) {
-        throw new RuntimeException('Hue-Dienst konnte nicht initialisiert werden.');
-    }
-
-    $headers = ['Accept: application/json'];
-    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-    curl_setopt($ch, CURLOPT_TIMEOUT, 10);
-    curl_setopt($ch, CURLOPT_CUSTOMREQUEST, strtoupper($method));
-
-    if ($payload !== null) {
-        $body = json_encode($payload, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
-        if ($body === false) {
-            curl_close($ch);
-            throw new RuntimeException('Anfrage konnte nicht serialisiert werden.');
-        }
-        $headers[] = 'Content-Type: application/json';
-        curl_setopt($ch, CURLOPT_POSTFIELDS, $body);
-    }
-
-    curl_setopt($ch, CURLOPT_HTTPHEADER, $headers);
-
-    $response = curl_exec($ch);
-    if ($response === false) {
-        $error = curl_error($ch);
-        curl_close($ch);
-        throw new RuntimeException('Hue-Dienst nicht erreichbar: ' . $error);
-    }
-
-    $status = (int) curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
-    $contentType = curl_getinfo($ch, CURLINFO_CONTENT_TYPE) ?: '';
-    curl_close($ch);
-
-    if ($status >= 400) {
-        throw new RuntimeException('Hue-Dienst meldet HTTP ' . $status . ': ' . $response);
-    }
-
-    if (stripos($contentType, 'application/json') !== false) {
-        $decoded = json_decode($response, true);
-        if (!is_array($decoded)) {
-            throw new RuntimeException('Hue-Dienst lieferte ungültige JSON-Antwort.');
-        }
-        return $decoded;
-    }
-
-    return ['raw' => $response];
-}
-
-function handle_ajax(string $configPath): void
-{
-    $action = $_GET['action'] ?? '';
-
-    try {
-        switch ($action) {
-            case 'list_bridges':
-                $config = load_plugin_config($configPath);
-                respond_json(['bridges' => $config['bridges']]);
-                break;
-
-            case 'save_bridge':
-                $payload = read_json_body();
-                $bridgeIp = trim((string) ($payload['bridge_ip'] ?? ''));
-                $applicationKey = trim((string) ($payload['application_key'] ?? ''));
-                if ($bridgeIp === '' || $applicationKey === '') {
-                    throw new RuntimeException('IP-Adresse und Application-Key sind Pflichtfelder.');
-                }
-
-                $config = load_plugin_config($configPath);
-                $bridges = $config['bridges'];
-                $bridgeResponse = null;
-
-                $identifier = isset($payload['id']) && is_string($payload['id']) && $payload['id'] !== ''
-                    ? $payload['id']
-                    : null;
-
-                $bridge = [
-                    'id' => $identifier,
-                    'name' => isset($payload['name']) ? trim((string) $payload['name']) : null,
-                    'bridge_ip' => $bridgeIp,
-                    'application_key' => $applicationKey,
-                    'client_key' => isset($payload['client_key']) ? trim((string) $payload['client_key']) : null,
-                    'use_https' => (bool) ($payload['use_https'] ?? true),
-                    'verify_tls' => (bool) ($payload['verify_tls'] ?? false),
-                ];
-
-                $updated = false;
-                foreach ($bridges as $index => $existing) {
-                    if ($identifier !== null && $existing['id'] === $identifier) {
-                        $bridges[$index] = normalise_bridge($bridge, array_diff_key($bridges, [$index => true]));
-                        $bridgeResponse = $bridges[$index];
-                        $updated = true;
-                        break;
-                    }
-                }
-
-                if (!$updated) {
-                    $bridgeResponse = normalise_bridge($bridge, $bridges);
-                    $bridges[] = $bridgeResponse;
-                }
-
-                save_plugin_config($configPath, ['bridges' => $bridges]);
-                respond_json(['bridge' => $bridgeResponse]);
-                break;
-
-            case 'delete_bridge':
-                $payload = read_json_body();
-                $identifier = trim((string) ($payload['id'] ?? ''));
-                if ($identifier === '') {
-                    throw new RuntimeException('Bridge-ID fehlt.');
-                }
-                $config = load_plugin_config($configPath);
-                $bridges = array_values(array_filter(
-                    $config['bridges'],
-                    static fn(array $bridge): bool => $bridge['id'] !== $identifier
-                ));
-                save_plugin_config($configPath, ['bridges' => $bridges]);
-                respond_json(['ok' => true]);
-                break;
-
-            case 'test_connection':
-                $bridgeId = trim((string) ($_GET['bridge_id'] ?? ''));
-                if ($bridgeId === '') {
-                    throw new RuntimeException('Es wurde keine Bridge ausgewählt.');
-                }
-                call_hue_service('/lights', 'GET', null, $bridgeId);
-                respond_json(['ok' => true]);
-                break;
-
-            case 'get_resources':
-                $bridgeId = trim((string) ($_GET['bridge_id'] ?? ''));
-                $type = trim((string) ($_GET['type'] ?? ''));
-                if ($bridgeId === '') {
-                    throw new RuntimeException('Es wurde keine Bridge ausgewählt.');
-                }
-                if (!in_array($type, ['lights', 'scenes', 'rooms'], true)) {
-                    throw new RuntimeException('Unbekannter Ressourcentyp.');
-                }
-                $result = call_hue_service('/' . $type, 'GET', null, $bridgeId);
-                respond_json(['items' => $result]);
-                break;
-
-            case 'light_command':
-                $payload = read_json_body();
-                $bridgeId = trim((string) ($payload['bridge_id'] ?? ''));
-                $lightId = trim((string) ($payload['light_id'] ?? ''));
-                if ($bridgeId === '' || $lightId === '') {
-                    throw new RuntimeException('Bridge und Lampen-RID sind erforderlich.');
-                }
-                $body = [];
-                if (array_key_exists('on', $payload)) {
-                    $body['on'] = (bool) $payload['on'];
-                }
-                if (isset($payload['brightness']) && $payload['brightness'] !== '') {
-                    $value = (int) $payload['brightness'];
-                    if ($value < 0 || $value > 100) {
-                        throw new RuntimeException('Die Helligkeit muss zwischen 0 und 100 liegen.');
-                    }
-                    $body['brightness'] = $value;
-                }
-                call_hue_service('/lights/' . rawurlencode($lightId) . '/state', 'POST', $body, $bridgeId);
-                respond_json(['ok' => true]);
-                break;
-
-            case 'scene_command':
-                $payload = read_json_body();
-                $bridgeId = trim((string) ($payload['bridge_id'] ?? ''));
-                $sceneId = trim((string) ($payload['scene_id'] ?? ''));
-                if ($bridgeId === '' || $sceneId === '') {
-                    throw new RuntimeException('Bridge und Szenen-RID sind erforderlich.');
-                }
-                $body = [];
-                if (!empty($payload['target_rid']) && !empty($payload['target_rtype'])) {
-                    $body['target_rid'] = (string) $payload['target_rid'];
-                    $body['target_rtype'] = (string) $payload['target_rtype'];
-                }
-                call_hue_service('/scenes/' . rawurlencode($sceneId) . '/activate', 'POST', $body, $bridgeId);
-                respond_json(['ok' => true]);
-                break;
-
-            default:
-                respond_error('Unbekannte Aktion: ' . $action, 404);
-        }
-    } catch (RuntimeException $exception) {
-        respond_error($exception->getMessage());
-    } catch (Throwable $throwable) {
-        respond_error('Unerwarteter Fehler: ' . $throwable->getMessage(), 500);
-    }
-}
-
-$configPath = plugin_config_path();
-
-if (isset($_GET['ajax'])) {
-    handle_ajax($configPath);
-    return;
-}
-
 header('Content-Type: text/html; charset=utf-8');
 ?>
 <!DOCTYPE html>
@@ -406,10 +12,9 @@ header('Content-Type: text/html; charset=utf-8');
       :root {
         color-scheme: light dark;
         --accent: #005a9c;
-        --accent-light: rgba(0, 90, 156, 0.2);
-        --accent-dark: #0b3d70;
-        --card-bg: rgba(255, 255, 255, 0.92);
-        --card-border: rgba(15, 23, 42, 0.08);
+        --accent-light: #e2f1ff;
+        --card-bg: rgba(255, 255, 255, 0.9);
+        --card-border: rgba(0, 0, 0, 0.08);
         font-family: "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
       }
 
@@ -417,7 +22,7 @@ header('Content-Type: text/html; charset=utf-8');
         margin: 0;
         background: linear-gradient(160deg, #101935 0%, #1f2a44 40%, #0f1a2c 100%);
         min-height: 100vh;
-        color: #0f172a;
+        color: #111;
         display: flex;
         flex-direction: column;
         align-items: center;
@@ -427,52 +32,47 @@ header('Content-Type: text/html; charset=utf-8');
 
       header {
         text-align: center;
-        color: #f8fafc;
+        color: #fff;
         margin-bottom: 2rem;
-        max-width: 960px;
       }
 
       header h1 {
-        font-size: clamp(2rem, 4vw, 3rem);
-        margin: 0 0 0.75rem;
+        font-size: clamp(2rem, 4vw, 2.8rem);
+        margin: 0 0 0.5rem;
         font-weight: 600;
       }
 
       header p {
         margin: 0;
-        font-size: 1.05rem;
-        opacity: 0.85;
+        font-size: 1rem;
+        opacity: 0.8;
       }
 
       main {
-        width: min(960px, 100%);
+        width: min(940px, 100%);
         display: grid;
-        gap: 1.75rem;
+        gap: 1.5rem;
       }
 
       .card {
         background: var(--card-bg);
         border-radius: 16px;
-        box-shadow: 0 20px 45px rgba(15, 23, 42, 0.25);
+        box-shadow: 0 14px 32px rgba(0, 0, 0, 0.25);
         border: 1px solid var(--card-border);
-        padding: 1.8rem;
+        padding: 1.6rem;
         backdrop-filter: blur(6px);
       }
 
       .card h2 {
         margin-top: 0;
-        font-size: 1.5rem;
+        font-size: 1.4rem;
         color: var(--accent);
-      }
-
-      .muted {
-        color: rgba(15, 23, 42, 0.6);
       }
 
       label {
         font-weight: 600;
         display: block;
-        margin-bottom: 0.35rem;
+        margin-bottom: 0.25rem;
       }
 
       input,
@@ -487,17 +87,12 @@ header('Content-Type: text/html; charset=utf-8');
       select {
         width: 100%;
         box-sizing: border-box;
-        padding: 0.65rem 0.75rem;
-        border-radius: 12px;
-        border: 1px solid rgba(15, 23, 42, 0.18);
-        background: rgba(255, 255, 255, 0.96);
+        padding: 0.6rem 0.75rem;
+        border-radius: 10px;
+        border: 1px solid rgba(0, 0, 0, 0.2);
+        background: rgba(255, 255, 255, 0.92);
         transition: border 0.2s ease, box-shadow 0.2s ease;
         color: #0f172a;
-      }
-
-      input::placeholder,
-      textarea::placeholder {
-        color: rgba(15, 23, 42, 0.5);
       }
 
       input:focus,
@@ -508,8 +103,13 @@ header('Content-Type: text/html; charset=utf-8');
         box-shadow: 0 0 0 3px var(--accent-light);
       }
 
+      input::placeholder,
+      textarea::placeholder {
+        color: rgba(15, 23, 42, 0.55);
+      }
+
       button {
-        padding: 0.65rem 1.4rem;
+        padding: 0.6rem 1.2rem;
         border-radius: 999px;
         border: none;
         background: var(--accent);
@@ -520,43 +120,45 @@ header('Content-Type: text/html; charset=utf-8');
       }
 
       button.secondary {
-        background: rgba(0, 90, 156, 0.12);
-        color: var(--accent-dark);
+        background: rgba(16, 25, 53, 0.08);
+        color: var(--accent);
       }
 
       button.danger {
-        background: rgba(185, 28, 28, 0.18);
+        background: rgba(185, 28, 28, 0.15);
         color: #991b1b;
       }
 
       button:hover {
         transform: translateY(-1px);
-        box-shadow: 0 12px 22px rgba(15, 23, 42, 0.18);
-      }
-
-      button:disabled {
-        opacity: 0.5;
-        cursor: not-allowed;
-        transform: none;
-        box-shadow: none;
+        box-shadow: 0 8px 16px rgba(0, 0, 0, 0.18);
       }
 
       .actions {
         display: flex;
         flex-wrap: wrap;
-        gap: 0.9rem;
+        gap: 0.8rem;
         margin-top: 1rem;
       }
 
       .grid {
         display: grid;
-        gap: 1.1rem;
+        gap: 1rem;
       }
 
-      @media (min-width: 740px) {
+      @media (min-width: 720px) {
         .grid.two {
           grid-template-columns: repeat(2, minmax(0, 1fr));
         }
+      }
+
+      pre {
+        background: rgba(0, 0, 0, 0.06);
+        border-radius: 12px;
+        padding: 1rem;
+        overflow-x: auto;
+        margin: 0;
+        font-size: 0.9rem;
       }
 
       table {
@@ -568,8 +170,8 @@ header('Content-Type: text/html; charset=utf-8');
 
       th,
       td {
-        padding: 0.55rem 0.75rem;
-        border-bottom: 1px solid rgba(15, 23, 42, 0.08);
+        padding: 0.5rem 0.75rem;
+        border-bottom: 1px solid rgba(0, 0, 0, 0.08);
         text-align: left;
       }
 
@@ -577,38 +179,14 @@ header('Content-Type: text/html; charset=utf-8');
         background: rgba(0, 90, 156, 0.06);
       }
 
-      .bridge-items {
-        list-style: none;
-        padding: 0;
-        margin: 1rem 0 0;
-        display: grid;
-        gap: 0.75rem;
-      }
-
-      .bridge-item {
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        padding: 0.75rem 1rem;
-        border: 1px solid rgba(15, 23, 42, 0.08);
-        border-radius: 12px;
-        background: rgba(255, 255, 255, 0.86);
-      }
-
-      .bridge-actions {
-        display: flex;
-        align-items: center;
-        gap: 0.6rem;
-      }
-
       .tag {
         display: inline-flex;
         align-items: center;
         gap: 0.25rem;
-        padding: 0.25rem 0.65rem;
+        padding: 0.2rem 0.6rem;
         border-radius: 999px;
-        background: rgba(0, 90, 156, 0.14);
-        color: var(--accent-dark);
+        background: rgba(0, 90, 156, 0.1);
+        color: var(--accent);
         font-size: 0.8rem;
         font-weight: 600;
       }
@@ -616,26 +194,82 @@ header('Content-Type: text/html; charset=utf-8');
       .message {
         margin-top: 1rem;
         border-radius: 12px;
-        padding: 0.8rem 1rem;
+        padding: 0.75rem 1rem;
         display: none;
         font-weight: 600;
       }
 
       .message.error {
-        background: rgba(220, 38, 38, 0.14);
-        color: #7f1d1d;
+        background: rgba(220, 38, 38, 0.12);
+        color: #8b1d1d;
       }
 
       .message.success {
         background: rgba(34, 197, 94, 0.15);
-        color: #14532d;
+        color: #126333;
+      }
+
+      .muted {
+        opacity: 0.8;
+        font-size: 0.9rem;
+      }
+
+      .form-checks {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.75rem;
+        margin-top: 0.75rem;
+      }
+
+      .form-checks label {
+        font-weight: 500;
+        display: inline-flex;
+        align-items: center;
+        gap: 0.45rem;
+        margin: 0;
+      }
+
+      .form-checks input[type="checkbox"] {
+        width: auto;
+        accent-color: var(--accent);
+        transform: scale(1.1);
+      }
+
+      .bridge-items {
+        list-style: none;
+        padding: 0;
+        margin: 0.75rem 0 0;
+        display: flex;
+        flex-direction: column;
+        gap: 0.5rem;
+      }
+
+      .bridge-item {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 0.6rem 0.75rem;
+        border-radius: 10px;
+        background: rgba(15, 23, 42, 0.05);
+      }
+
+      .bridge-item strong {
+        color: var(--accent);
+      }
+
+      .bridge-actions {
+        display: flex;
+        gap: 0.5rem;
+      }
+
+      button[hidden] {
+        display: none;
       }
 
       footer {
-        margin-top: 2.5rem;
-        color: rgba(248, 250, 252, 0.8);
+        margin-top: 2rem;
+        color: rgba(255, 255, 255, 0.7);
         font-size: 0.85rem;
-        text-align: center;
       }
     </style>
   </head>
@@ -643,291 +277,313 @@ header('Content-Type: text/html; charset=utf-8');
     <header>
       <h1>Philips Hue API v2 Bridge</h1>
       <p>
-        Lege deine Hue Bridges an, verwalte Anwendungsschlüssel und teste Lampen
-        oder Szenen direkt aus dem LoxBerry-Plugin.
+        Verwalte deine Hue-Lampen, Räume und Szenen direkt aus LoxBerry heraus.
       </p>
     </header>
     <main>
-      <section class="card">
-        <h2>Hue Bridges</h2>
+      <section class="card" id="bridge-card">
+        <h2>Hue Bridges verwalten</h2>
         <p class="muted">
-          Nutze das Formular, um eine Bridge zu hinterlegen. Die Einstellungen
-          werden in <code>config.json</code> gespeichert und automatisch vom Hue
-          Dienst übernommen.
+          Hinterlege hier die IP-Adresse und den <em>application key</em> deiner Philips
+          Hue Bridges. Du kannst mehrere Bridges anlegen und später im Interface
+          auswählen.
         </p>
         <div id="bridge-list" class="muted">
-          <p>Noch keine Bridge geladen.</p>
+          Noch keine Verbindung zur Hue-Bridge-API hergestellt. Gib unten die
+          Basis-URL ein und lade anschließend die Bridge-Liste.
         </div>
-        <div class="grid two" style="margin-top: 1.2rem">
-          <div>
-            <label for="bridge-select">Aktive Bridge</label>
-            <select id="bridge-select" disabled></select>
-          </div>
-          <div class="actions" style="justify-content: flex-start">
-            <button type="button" id="reload-bridges" class="secondary">
-              Bridge-Liste aktualisieren
-            </button>
-          </div>
-        </div>
-        <form id="bridge-form" class="grid" autocomplete="off">
-          <input type="hidden" id="bridge-id" />
+        <form id="bridge-form" class="grid">
+          <input id="bridge-id" type="hidden" />
           <div class="grid two">
             <div>
               <label for="bridge-name">Anzeigename</label>
-              <input
-                type="text"
-                id="bridge-name"
-                placeholder="z. B. Wohnzimmer"
-              />
+              <input id="bridge-name" type="text" placeholder="z. B. Wohnzimmer" />
             </div>
             <div>
-              <label for="bridge-ip">Bridge-IP oder Hostname *</label>
+              <label for="bridge-ip">Bridge-Adresse</label>
               <input
-                type="text"
                 id="bridge-ip"
-                placeholder="192.168.1.50"
+                type="text"
+                placeholder="192.168.1.50 oder bridge.local"
                 required
               />
             </div>
           </div>
-          <div>
-            <label for="bridge-app-key">Application Key *</label>
-            <input
-              type="text"
-              id="bridge-app-key"
-              placeholder="Hue-App-Schlüssel"
-              required
-            />
-          </div>
-          <div>
-            <label for="bridge-client-key">Client Key (optional)</label>
-            <input
-              type="text"
-              id="bridge-client-key"
-              placeholder="Nur für Entertainment-Streams erforderlich"
-            />
-          </div>
-          <div class="grid two">
+          <label for="bridge-app-key">Hue Application Key</label>
+          <input
+            id="bridge-app-key"
+            type="text"
+            placeholder="Hue App Key (z. B. 40 Zeichen)"
+            required
+          />
+          <label for="bridge-client-key">Hue Client Key (optional)</label>
+          <input
+            id="bridge-client-key"
+            type="text"
+            placeholder="Nur für Entertainment-Verbindungen erforderlich"
+          />
+          <div class="form-checks">
             <label>
-              <input type="checkbox" id="bridge-use-https" checked /> HTTPS
-              verwenden
+              <input id="bridge-use-https" type="checkbox" checked />
+              HTTPS verwenden
             </label>
             <label>
-              <input type="checkbox" id="bridge-verify-tls" /> TLS-Zertifikat
-              prüfen
+              <input id="bridge-verify-tls" type="checkbox" />
+              TLS-Zertifikate prüfen
             </label>
           </div>
           <div class="actions">
-            <button type="submit">Speichern</button>
+            <button type="submit" id="bridge-save">Bridge speichern</button>
             <button type="button" id="bridge-reset" class="secondary">
               Formular leeren
             </button>
             <button type="button" id="bridge-delete" class="danger" hidden>
-              Bridge löschen
+              Bridge entfernen
             </button>
           </div>
+          <div id="bridge-message" class="message"></div>
         </form>
-        <div id="bridge-message" class="message"></div>
       </section>
 
-      <section class="card">
-        <h2>Verbindung testen</h2>
+      <section class="card" id="connection-card">
+        <h2>Verbindung zur Bridge-API</h2>
         <p class="muted">
-          Wähle eine Bridge aus und prüfe, ob der Python-Dienst die Verbindung
-          zur Hue-Bridge herstellen kann.
+          Der Bridge-Dienst läuft standardmäßig auf Port <strong>5510</strong> desselben
+          LoxBerry-Systems. Passe die Adresse an, falls du sie verändert hast.
         </p>
+        <label for="bridge-select">Aktive Hue Bridge</label>
+        <select id="bridge-select"></select>
+        <label for="base-url">Basis-URL</label>
+        <input id="base-url" type="text" placeholder="http://loxberry:5510" />
         <div class="actions">
+          <button type="button" id="load-bridges">Bridge-Liste laden</button>
           <button type="button" id="test-connection">Verbindung testen</button>
+          <button type="button" id="use-default-base" class="secondary">
+            Standard-Adresse übernehmen
+          </button>
+          <button type="button" id="open-docs" class="secondary">
+            API-Dokumentation öffnen
+          </button>
         </div>
         <div id="connection-message" class="message"></div>
       </section>
 
       <section class="card">
-        <h2>Hue-Ressourcen anzeigen</h2>
+        <h2>Ressourcen erkunden</h2>
         <p class="muted">
-          Nach erfolgreicher Verbindung kannst du Lampen, Szenen oder Räume aus
-          der ausgewählten Bridge laden.
+          Lade die aktuell von der Hue Bridge gemeldeten Ressourcen. Mit einem Klick
+          werden die Daten direkt von der lokalen REST-API geladen.
         </p>
         <div class="actions">
-          <button type="button" class="secondary load-resource" data-type="lights">
-            Lampen laden
-          </button>
-          <button type="button" class="secondary load-resource" data-type="scenes">
-            Szenen laden
-          </button>
-          <button type="button" class="secondary load-resource" data-type="rooms">
-            Räume laden
-          </button>
+          <button data-endpoint="lights" class="load-resource">Lampen</button>
+          <button data-endpoint="rooms" class="load-resource">Räume</button>
+          <button data-endpoint="scenes" class="load-resource">Szenen</button>
         </div>
         <div id="resource-message" class="message"></div>
-        <table id="resource-output">
-          <thead>
-            <tr>
-              <th>Name</th>
-              <th>RID</th>
-              <th>Typ</th>
-              <th>Details</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr>
-              <td colspan="4" class="muted">
-                Noch keine Daten geladen. Wähle oben eine Kategorie.
-              </td>
-            </tr>
-          </tbody>
-        </table>
+        <div id="resource-output">
+          <table>
+            <thead>
+              <tr>
+                <th>Name</th>
+                <th>Ressourcen-ID</th>
+                <th>Typ</th>
+                <th>Details</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td colspan="4" class="muted">
+                  Wähle oben eine Kategorie, um die Daten zu laden.
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
       </section>
 
-      <section class="card">
-        <h2>Licht steuern</h2>
-        <div class="grid two">
-          <div>
-            <label for="light-id">Lampen-RID *</label>
-            <input type="text" id="light-id" placeholder="UUID der Lampe" />
+      <section class="card grid two">
+        <div>
+          <h2>Lampe schalten</h2>
+          <label for="light-id">Lampenzuordnung (RID)</label>
+          <input id="light-id" type="text" placeholder="z. B. 12345678-90ab" />
+          <label for="light-action">Aktion</label>
+          <select id="light-action">
+            <option value="on">Einschalten</option>
+            <option value="off">Ausschalten</option>
+          </select>
+          <label for="light-brightness">Helligkeit (0-100, optional)</label>
+          <input id="light-brightness" type="text" inputmode="numeric" />
+          <div class="actions">
+            <button id="light-submit">Senden</button>
           </div>
-          <div>
-            <label for="light-action">Aktion</label>
-            <select id="light-action">
-              <option value="on">Einschalten</option>
-              <option value="off">Ausschalten</option>
-            </select>
-          </div>
+          <div id="light-message" class="message"></div>
         </div>
         <div>
-          <label for="light-brightness">Helligkeit (0-100)</label>
-          <input type="text" id="light-brightness" placeholder="Optional" />
+          <h2>Szene aktivieren</h2>
+          <label for="scene-id">Szenen-RID</label>
+          <input id="scene-id" type="text" placeholder="RID der Szene" />
+          <label for="scene-target">Optionales Ziel (RID::rtype)</label>
+          <input id="scene-target" type="text" placeholder="&lt;resource-id&gt;::&lt;rtype&gt;" />
+          <div class="actions">
+            <button id="scene-submit">Aktivieren</button>
+          </div>
+          <div id="scene-message" class="message"></div>
         </div>
-        <div class="actions">
-          <button type="button" id="light-submit">Befehl senden</button>
-        </div>
-        <div id="light-message" class="message"></div>
       </section>
 
       <section class="card">
-        <h2>Szene aktivieren</h2>
-        <div class="grid two">
-          <div>
-            <label for="scene-id">Szenen-RID *</label>
-            <input type="text" id="scene-id" placeholder="UUID der Szene" />
-          </div>
-          <div>
-            <label for="scene-target">Ziel (optional)</label>
-            <input
-              type="text"
-              id="scene-target"
-              placeholder="<resource-id>::<rtype>"
-            />
-          </div>
-        </div>
-        <div class="actions">
-          <button type="button" id="scene-submit">Szene starten</button>
-        </div>
-        <div id="scene-message" class="message"></div>
+        <h2>Konfiguration bearbeiten</h2>
+        <p class="muted">
+          Du findest die Einstellungen unter <code>config/config.json</code> im
+          Plugin-Verzeichnis. Beispiel:
+        </p>
+        <pre>{
+  "bridge_ip": "192.168.1.50",
+  "application_key": "dein-langer-hue-app-key",
+  "api_port": 5510
+}</pre>
+        <p class="muted">
+          Nach Änderungen starte den Dienst über <code>Service</code> →
+          <code>Plugin-Dienste</code> neu oder führe das Skript
+          <code>bin/run_server.sh</code> aus.
+        </p>
       </section>
     </main>
 
     <footer>
-      Tipp: Der Python-Dienst läuft standardmäßig auf
-      <code>127.0.0.1:5510</code>. Passe die Umgebungsvariablen
-      <code>HUE_PLUGIN_SERVICE_HOST</code> und
-      <code>HUE_PLUGIN_SERVICE_PORT</code> an, falls du den Dienst extern
-      betreibst.
+      Tipp: Wenn du ein anderes Muster-Plugin ansehen möchtest, öffne die LoxBerry
+      Dokumentation unter <code>https://loxwiki.atlassian.net/wiki</code>.
     </footer>
 
     <script>
-      const bridgeListElement = document.getElementById('bridge-list');
-      const bridgeSelect = document.getElementById('bridge-select');
-      const bridgeForm = document.getElementById('bridge-form');
-      const bridgeIdField = document.getElementById('bridge-id');
-      const bridgeNameInput = document.getElementById('bridge-name');
-      const bridgeIpInput = document.getElementById('bridge-ip');
-      const bridgeAppKeyInput = document.getElementById('bridge-app-key');
-      const bridgeClientKeyInput = document.getElementById('bridge-client-key');
-      const bridgeUseHttpsInput = document.getElementById('bridge-use-https');
-      const bridgeVerifyTlsInput = document.getElementById('bridge-verify-tls');
-      const bridgeMessage = document.getElementById('bridge-message');
-      const connectionMessage = document.getElementById('connection-message');
-      const resourceMessage = document.getElementById('resource-message');
-      const lightMessage = document.getElementById('light-message');
-      const sceneMessage = document.getElementById('scene-message');
-      const bridgeDeleteButton = document.getElementById('bridge-delete');
-      const bridgeResetButton = document.getElementById('bridge-reset');
-      const reloadBridgesButton = document.getElementById('reload-bridges');
+      const baseUrlInput = document.getElementById("base-url");
+      const bridgeSelect = document.getElementById("bridge-select");
+      const bridgeList = document.getElementById("bridge-list");
+      const bridgeForm = document.getElementById("bridge-form");
+      const bridgeIdField = document.getElementById("bridge-id");
+      const bridgeNameInput = document.getElementById("bridge-name");
+      const bridgeIpInput = document.getElementById("bridge-ip");
+      const bridgeAppKeyInput = document.getElementById("bridge-app-key");
+      const bridgeClientKeyInput = document.getElementById("bridge-client-key");
+      const bridgeUseHttpsInput = document.getElementById("bridge-use-https");
+      const bridgeVerifyTlsInput = document.getElementById("bridge-verify-tls");
+      const bridgeMessage = document.getElementById("bridge-message");
+      const bridgeDeleteButton = document.getElementById("bridge-delete");
+      const bridgeResetButton = document.getElementById("bridge-reset");
+      const loadBridgesButton = document.getElementById("load-bridges");
+      const useDefaultBaseButton = document.getElementById("use-default-base");
+      const connectionMessage = document.getElementById("connection-message");
+      const resourceMessage = document.getElementById("resource-message");
+      const lightMessage = document.getElementById("light-message");
+      const sceneMessage = document.getElementById("scene-message");
 
-      const state = {
-        bridges: [],
-        activeBridgeId: null,
-      };
+      let bridges = [];
+      let activeBridgeId = null;
+      let hasAttemptedBridgeLoad = false;
 
       const message = (el, type, text) => {
         if (!el) {
           return;
         }
         el.textContent = text;
-        el.className = type ? `message ${type}` : 'message';
-        el.style.display = text ? 'block' : 'none';
+        el.className = type ? `message ${type}` : "message";
+        el.style.display = text ? "block" : "none";
       };
 
-      const buildUrl = (action, params = {}) => {
-        const url = new URL('index.php', window.location.href);
-        url.searchParams.set('ajax', '1');
-        url.searchParams.set('action', action);
-        Object.entries(params).forEach(([key, value]) => {
-          if (value !== undefined && value !== null && value !== '') {
-            url.searchParams.set(key, value);
-          }
-        });
-        return url.toString();
+      const defaultBaseUrl = () => {
+        const hostname = window.location.hostname || "loxberry";
+        return `http://${hostname}:5510`;
       };
 
-      const apiFetch = async (action, { method = 'GET', body, params = {} } = {}) => {
+      const readBaseUrl = () => baseUrlInput.value.trim().replace(/\/$/, "");
+
+      const ensureBaseUrlConfigured = (targetMessage) => {
+        const value = readBaseUrl();
+        if (!value) {
+          message(
+            targetMessage,
+            "error",
+            "Bitte gib zuerst die Basis-URL des Hue-Dienstes ein."
+          );
+          baseUrlInput.focus();
+          return null;
+        }
+        return value;
+      };
+
+      const apiFetch = async (
+        path,
+        { method = "GET", body, includeBridge = false } = {}
+      ) => {
+        const base = readBaseUrl();
+        if (!base) {
+          throw new Error("Keine Basis-URL konfiguriert.");
+        }
+        const url = new URL(`${base}${path}`);
+        if (includeBridge && activeBridgeId) {
+          url.searchParams.set("bridge_id", activeBridgeId);
+        }
         const options = {
           method,
-          headers: {
-            'Content-Type': 'application/json',
-            'X-Requested-With': 'XMLHttpRequest',
-          },
+          headers: { "Content-Type": "application/json" },
         };
         if (body !== undefined) {
-          options.body = JSON.stringify(body);
+          options.body = typeof body === "string" ? body : JSON.stringify(body);
         }
-        const response = await fetch(buildUrl(action, params), options);
-        const contentType = response.headers.get('content-type') || '';
-        let payload = null;
-        if (contentType.includes('application/json')) {
-          payload = await response.json();
-        } else {
-          const text = await response.text();
-          payload = text ? { error: text } : null;
-        }
+        const response = await fetch(url.toString(), options);
         if (!response.ok) {
-          throw new Error(payload && payload.error ? payload.error : 'Anfrage fehlgeschlagen.');
+          const details = await response.text();
+          throw new Error(
+            `HTTP ${response.status}: ${details || response.statusText}`
+          );
         }
-        if (payload && payload.error) {
-          throw new Error(payload.error);
+        if (response.status === 204) {
+          return null;
         }
-        return payload ?? {};
+        const contentType = response.headers.get("content-type") || "";
+        if (contentType.includes("application/json")) {
+          return response.json();
+        }
+        return response.text();
+      };
+
+      const hueFetch = (path, options = {}) =>
+        apiFetch(path, { includeBridge: true, ...options });
+
+      const ensureBridgeSelected = (targetMessage) => {
+        if (!activeBridgeId) {
+          message(
+            targetMessage,
+            "error",
+            "Bitte lege zuerst eine Hue Bridge an und wähle sie aus."
+          );
+          return false;
+        }
+        return true;
       };
 
       const renderBridgeSelect = () => {
-        bridgeSelect.innerHTML = '';
-        if (!state.bridges.length) {
-          const option = document.createElement('option');
-          option.value = '';
-          option.textContent = 'Keine Bridge konfiguriert';
+        bridgeSelect.innerHTML = "";
+        if (!bridges.length) {
+          bridgeSelect.disabled = true;
+          const option = document.createElement("option");
+          option.textContent = hasAttemptedBridgeLoad
+            ? "Keine Bridge konfiguriert"
+            : "Bridge-Liste noch nicht geladen";
           option.disabled = true;
+          option.value = "";
           option.selected = true;
           bridgeSelect.appendChild(option);
-          bridgeSelect.disabled = true;
           return;
         }
         bridgeSelect.disabled = false;
-        state.bridges.forEach((bridge) => {
-          const option = document.createElement('option');
+        bridges.forEach((bridge) => {
+          const option = document.createElement("option");
           option.value = bridge.id;
-          option.textContent = bridge.name ? `${bridge.name} (${bridge.id})` : bridge.id;
-          if (bridge.id === state.activeBridgeId) {
+          option.textContent = bridge.name
+            ? `${bridge.name} (${bridge.id})`
+            : bridge.id;
+          if (bridge.id === activeBridgeId) {
             option.selected = true;
           }
           bridgeSelect.appendChild(option);
@@ -935,103 +591,125 @@ header('Content-Type: text/html; charset=utf-8');
       };
 
       const renderBridgeList = () => {
-        if (!state.bridges.length) {
-          bridgeListElement.innerHTML = '<p class="muted">Keine Bridge konfiguriert. Nutze das Formular, um eine neue Bridge anzulegen.</p>';
+        if (!bridges.length) {
+          bridgeList.innerHTML = hasAttemptedBridgeLoad
+            ? "<p class=\"muted\">Noch keine Bridge hinterlegt. Nutze das Formular, um eine Verbindung anzulegen.</p>"
+            : "<p class=\"muted\">Bridge-Liste noch nicht geladen. Gib unten die Basis-URL ein und klicke auf \"Bridge-Liste laden\".</p>";
           return;
         }
-        const list = document.createElement('ul');
-        list.className = 'bridge-items';
-        state.bridges.forEach((bridge) => {
-          const item = document.createElement('li');
-          item.className = 'bridge-item';
-          const info = document.createElement('div');
+        const list = document.createElement("ul");
+        list.className = "bridge-items";
+        bridges.forEach((bridge) => {
+          const item = document.createElement("li");
+          item.className = "bridge-item";
+          const info = document.createElement("div");
           info.innerHTML = `<strong>${bridge.name || bridge.id}</strong><br /><span class="muted">${bridge.bridge_ip}</span>`;
-          const actions = document.createElement('div');
-          actions.className = 'bridge-actions';
+          const actions = document.createElement("div");
+          actions.className = "bridge-actions";
 
-          const editButton = document.createElement('button');
-          editButton.type = 'button';
-          editButton.className = 'secondary';
-          editButton.textContent = 'Bearbeiten';
-          editButton.addEventListener('click', () => fillBridgeForm(bridge.id));
+          const editButton = document.createElement("button");
+          editButton.type = "button";
+          editButton.className = "secondary";
+          editButton.textContent = "Bearbeiten";
+          editButton.addEventListener("click", () => fillBridgeForm(bridge.id));
           actions.appendChild(editButton);
 
-          if (bridge.id === state.activeBridgeId) {
-            const tag = document.createElement('span');
-            tag.className = 'tag';
-            tag.textContent = 'Aktiv';
-            actions.appendChild(tag);
+          if (bridge.id === activeBridgeId) {
+            const activeTag = document.createElement("span");
+            activeTag.className = "tag";
+            activeTag.textContent = "Aktiv";
+            actions.appendChild(activeTag);
           } else {
-            const setActiveButton = document.createElement('button');
-            setActiveButton.type = 'button';
-            setActiveButton.className = 'secondary';
-            setActiveButton.textContent = 'Aktiv setzen';
-            setActiveButton.addEventListener('click', () => setActiveBridge(bridge.id));
-            actions.appendChild(setActiveButton);
+            const activateButton = document.createElement("button");
+            activateButton.type = "button";
+            activateButton.className = "secondary";
+            activateButton.textContent = "Aktiv setzen";
+            activateButton.addEventListener("click", () =>
+              setActiveBridge(bridge.id)
+            );
+            actions.appendChild(activateButton);
           }
 
           item.append(info, actions);
           list.appendChild(item);
         });
-        bridgeListElement.innerHTML = '';
-        bridgeListElement.appendChild(list);
+        bridgeList.innerHTML = "";
+        bridgeList.appendChild(list);
       };
 
       const setActiveBridge = (bridgeId) => {
-        state.activeBridgeId = bridgeId;
+        activeBridgeId = bridgeId;
         renderBridgeSelect();
         renderBridgeList();
-      };
-
-      const resetBridgeForm = () => {
-        bridgeForm.reset();
-        bridgeIdField.value = '';
-        bridgeUseHttpsInput.checked = true;
-        bridgeVerifyTlsInput.checked = false;
-        bridgeDeleteButton.hidden = true;
-        message(bridgeMessage, '', '');
+        if (bridgeSelect.value !== bridgeId) {
+          bridgeSelect.value = bridgeId;
+        }
       };
 
       const fillBridgeForm = (bridgeId) => {
-        const bridge = state.bridges.find((b) => b.id === bridgeId);
+        const bridge = bridges.find((b) => b.id === bridgeId);
         if (!bridge) {
           return;
         }
         bridgeIdField.value = bridge.id;
-        bridgeNameInput.value = bridge.name || '';
-        bridgeIpInput.value = bridge.bridge_ip || '';
-        bridgeAppKeyInput.value = bridge.application_key || '';
-        bridgeClientKeyInput.value = bridge.client_key || '';
+        bridgeNameInput.value = bridge.name || "";
+        bridgeIpInput.value = bridge.bridge_ip || "";
+        bridgeAppKeyInput.value = bridge.application_key || "";
+        bridgeClientKeyInput.value = bridge.client_key || "";
         bridgeUseHttpsInput.checked = Boolean(bridge.use_https);
         bridgeVerifyTlsInput.checked = Boolean(bridge.verify_tls);
         bridgeDeleteButton.hidden = false;
-        message(bridgeMessage, '', '');
+        message(bridgeMessage, "", "");
       };
 
-      const loadBridges = async () => {
-        try {
-          const data = await apiFetch('list_bridges');
-          state.bridges = Array.isArray(data.bridges) ? data.bridges : [];
-          if (!state.bridges.length) {
-            state.activeBridgeId = null;
-          } else if (!state.activeBridgeId || !state.bridges.some((bridge) => bridge.id === state.activeBridgeId)) {
-            state.activeBridgeId = state.bridges[0].id;
-          }
-          renderBridgeSelect();
-          renderBridgeList();
-        } catch (error) {
-          message(bridgeMessage, 'error', error.message);
-          state.bridges = [];
-          state.activeBridgeId = null;
-          renderBridgeSelect();
-          renderBridgeList();
-        }
+      const resetBridgeForm = () => {
+        bridgeForm.reset();
+        bridgeIdField.value = "";
+        bridgeUseHttpsInput.checked = true;
+        bridgeVerifyTlsInput.checked = false;
+        bridgeDeleteButton.hidden = true;
+        message(bridgeMessage, "", "");
       };
 
-      bridgeForm.addEventListener('submit', async (event) => {
+      bridgeResetButton.addEventListener("click", (event) => {
         event.preventDefault();
+        resetBridgeForm();
+      });
+
+      bridgeDeleteButton.addEventListener("click", async () => {
+        if (!ensureBaseUrlConfigured(bridgeMessage)) {
+          return;
+        }
+        const bridgeId = bridgeIdField.value;
+        if (!bridgeId) {
+          return;
+        }
+        if (
+          !window.confirm(
+            `Bridge '${bridgeId}' wirklich entfernen? Diese Aktion kann nicht rückgängig gemacht werden.`
+          )
+        ) {
+          return;
+        }
+        try {
+          await apiFetch(`/config/bridges/${encodeURIComponent(bridgeId)}`, {
+            method: "DELETE",
+          });
+          message(bridgeMessage, "success", "Bridge wurde entfernt.");
+          await loadBridges();
+          resetBridgeForm();
+        } catch (error) {
+          message(bridgeMessage, "error", error.message);
+        }
+      });
+
+      bridgeForm.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        if (!ensureBaseUrlConfigured(bridgeMessage)) {
+          return;
+        }
+        const bridgeId = bridgeIdField.value.trim() || null;
         const payload = {
-          id: bridgeIdField.value || null,
           name: bridgeNameInput.value.trim() || null,
           bridge_ip: bridgeIpInput.value.trim(),
           application_key: bridgeAppKeyInput.value.trim(),
@@ -1040,193 +718,262 @@ header('Content-Type: text/html; charset=utf-8');
           verify_tls: bridgeVerifyTlsInput.checked,
         };
         if (!payload.bridge_ip || !payload.application_key) {
-          message(bridgeMessage, 'error', 'Bitte IP-Adresse und Application-Key ausfüllen.');
+          message(
+            bridgeMessage,
+            "error",
+            "Bitte gib sowohl die Bridge-Adresse als auch den Application Key an."
+          );
           return;
         }
         try {
-          await apiFetch('save_bridge', { method: 'POST', body: payload });
-          message(bridgeMessage, 'success', 'Bridge wurde gespeichert.');
+          if (bridgeId) {
+            await apiFetch(`/config/bridges/${encodeURIComponent(bridgeId)}`, {
+              method: "PUT",
+              body: payload,
+            });
+            message(bridgeMessage, "success", "Bridge wurde aktualisiert.");
+          } else {
+            await apiFetch("/config/bridges", {
+              method: "POST",
+              body: { ...payload, id: null },
+            });
+            message(bridgeMessage, "success", "Neue Bridge wurde angelegt.");
+          }
           await loadBridges();
-          if (!payload.id) {
+          if (!bridgeId) {
             resetBridgeForm();
           }
         } catch (error) {
-          message(bridgeMessage, 'error', error.message);
+          message(bridgeMessage, "error", error.message);
         }
       });
 
-      bridgeDeleteButton.addEventListener('click', async () => {
-        const id = bridgeIdField.value;
-        if (!id) {
+      bridgeSelect.addEventListener("change", (event) => {
+        setActiveBridge(event.target.value);
+      });
+
+      baseUrlInput.addEventListener("change", () => {
+        hasAttemptedBridgeLoad = false;
+        bridges = [];
+        activeBridgeId = null;
+        renderBridgeSelect();
+        renderBridgeList();
+      });
+
+      const loadBridges = async () => {
+        if (!ensureBaseUrlConfigured(bridgeMessage)) {
+          renderBridgeList();
           return;
         }
-        if (!window.confirm(`Bridge '${id}' wirklich löschen?`)) {
-          return;
-        }
+        hasAttemptedBridgeLoad = true;
+        bridgeList.innerHTML =
+          "<p class=\"muted\">Bridge-Liste wird geladen …</p>";
         try {
-          await apiFetch('delete_bridge', { method: 'POST', body: { id } });
-          message(bridgeMessage, 'success', 'Bridge wurde entfernt.');
-          resetBridgeForm();
-          await loadBridges();
+          const data = await apiFetch("/config/bridges");
+          bridges = Array.isArray(data) ? data : [];
+          if (!bridges.length) {
+            activeBridgeId = null;
+          } else if (
+            !activeBridgeId ||
+            !bridges.some((b) => b.id === activeBridgeId)
+          ) {
+            activeBridgeId = bridges[0].id;
+          }
+          renderBridgeSelect();
+          renderBridgeList();
+          if (activeBridgeId) {
+            bridgeSelect.value = activeBridgeId;
+          }
         } catch (error) {
-          message(bridgeMessage, 'error', error.message);
+          message(bridgeMessage, "error", error.message);
+          bridges = [];
+          activeBridgeId = null;
+          renderBridgeSelect();
+          renderBridgeList();
         }
-      });
-
-      bridgeResetButton.addEventListener('click', (event) => {
-        event.preventDefault();
-        resetBridgeForm();
-      });
-
-      bridgeSelect.addEventListener('change', (event) => {
-        setActiveBridge(event.target.value || null);
-      });
-
-      reloadBridgesButton.addEventListener('click', async () => {
-        message(bridgeMessage, '', '');
-        await loadBridges();
-      });
-
-      document.getElementById('test-connection').addEventListener('click', async () => {
-        message(connectionMessage, '', '');
-        if (!state.activeBridgeId) {
-          message(connectionMessage, 'error', 'Bitte zuerst eine Bridge auswählen.');
-          return;
-        }
-        try {
-          await apiFetch('test_connection', { params: { bridge_id: state.activeBridgeId } });
-          message(connectionMessage, 'success', 'Verbindung erfolgreich getestet.');
-        } catch (error) {
-          message(connectionMessage, 'error', `Verbindung fehlgeschlagen: ${error.message}`);
-        }
-      });
+      };
 
       const renderResources = (items) => {
-        const tbody = document.createElement('tbody');
-        if (!items || !items.length) {
-          const row = document.createElement('tr');
-          const cell = document.createElement('td');
+        const tbody = document
+          .querySelector("#resource-output tbody")
+          .cloneNode(false);
+        if (!items || items.length === 0) {
+          const row = document.createElement("tr");
+          const cell = document.createElement("td");
           cell.colSpan = 4;
-          cell.className = 'muted';
-          cell.textContent = 'Keine Daten gefunden.';
+          cell.textContent = "Keine Einträge gefunden.";
+          cell.className = "muted";
           row.appendChild(cell);
           tbody.appendChild(row);
         } else {
-          items.forEach((item) => {
-            const row = document.createElement('tr');
-            const nameCell = document.createElement('td');
-            nameCell.textContent = item.name || '(ohne Namen)';
-            const idCell = document.createElement('td');
-            idCell.textContent = item.id || '';
-            const typeCell = document.createElement('td');
-            const tag = document.createElement('span');
-            tag.className = 'tag';
-            tag.textContent = item.type || 'unbekannt';
-            typeCell.appendChild(tag);
-            const detailsCell = document.createElement('td');
-            const button = document.createElement('button');
-            button.className = 'secondary';
-            button.type = 'button';
-            button.textContent = 'JSON anzeigen';
-            button.addEventListener('click', () => {
+          for (const item of items) {
+            const row = document.createElement("tr");
+            const name = document.createElement("td");
+            name.textContent = item.name || "(ohne Namen)";
+            const rid = document.createElement("td");
+            rid.textContent = item.id;
+            const type = document.createElement("td");
+            type.innerHTML = `<span class="tag">${item.type}</span>`;
+            const details = document.createElement("td");
+            const button = document.createElement("button");
+            button.textContent = "JSON anzeigen";
+            button.className = "secondary";
+            button.addEventListener("click", () => {
               alert(JSON.stringify(item, null, 2));
             });
-            detailsCell.appendChild(button);
-            row.append(nameCell, idCell, typeCell, detailsCell);
+            details.appendChild(button);
+            row.append(name, rid, type, details);
             tbody.appendChild(row);
-          });
+          }
         }
-        const table = document.getElementById('resource-output');
-        table.replaceChild(tbody, table.querySelector('tbody'));
+        document.querySelector("#resource-output tbody").replaceWith(tbody);
       };
 
-      document.querySelectorAll('.load-resource').forEach((button) => {
-        button.addEventListener('click', async () => {
-          message(resourceMessage, '', '');
-          if (!state.activeBridgeId) {
-            message(resourceMessage, 'error', 'Bitte zuerst eine Bridge auswählen.');
+      document.getElementById("test-connection").addEventListener("click", async () => {
+        message(connectionMessage, "", "");
+        if (!ensureBaseUrlConfigured(connectionMessage)) {
+          return;
+        }
+        if (!ensureBridgeSelected(connectionMessage)) {
+          return;
+        }
+        try {
+          await hueFetch("/lights", { method: "GET" });
+          message(connectionMessage, "success", "Verbindung erfolgreich getestet.");
+        } catch (error) {
+          message(
+            connectionMessage,
+            "error",
+            `Verbindung fehlgeschlagen: ${error.message}`
+          );
+        }
+      });
+
+      document.getElementById("open-docs").addEventListener("click", () => {
+        const base = readBaseUrl();
+        if (!base) {
+          message(
+            connectionMessage,
+            "error",
+            "Bitte gib zuerst die Basis-URL des Hue-Dienstes ein."
+          );
+          baseUrlInput.focus();
+          return;
+        }
+        window.open(`${base}/docs`, "_blank", "noopener");
+      });
+
+      document.querySelectorAll(".load-resource").forEach((button) => {
+        button.addEventListener("click", async () => {
+          message(resourceMessage, "", "");
+          if (!ensureBaseUrlConfigured(resourceMessage)) {
             return;
           }
-          const type = button.getAttribute('data-type');
+          if (!ensureBridgeSelected(resourceMessage)) {
+            return;
+          }
+          const endpoint = button.getAttribute("data-endpoint");
           try {
-            const data = await apiFetch('get_resources', {
-              params: { bridge_id: state.activeBridgeId, type },
-            });
-            renderResources(data.items || []);
+            const data = await hueFetch(`/${endpoint}`);
+            renderResources(data);
           } catch (error) {
-            message(resourceMessage, 'error', `Fehler beim Laden: ${error.message}`);
+            message(
+              resourceMessage,
+              "error",
+              `Fehler beim Laden: ${error.message}`
+            );
           }
         });
       });
 
-      document.getElementById('light-submit').addEventListener('click', async () => {
-        message(lightMessage, '', '');
-        if (!state.activeBridgeId) {
-          message(lightMessage, 'error', 'Bitte zuerst eine Bridge auswählen.');
+      document.getElementById("light-submit").addEventListener("click", async () => {
+        message(lightMessage, "", "");
+        if (!ensureBaseUrlConfigured(lightMessage)) {
           return;
         }
-        const lightId = document.getElementById('light-id').value.trim();
+        if (!ensureBridgeSelected(lightMessage)) {
+          return;
+        }
+        const lightId = document.getElementById("light-id").value.trim();
         if (!lightId) {
-          message(lightMessage, 'error', 'Bitte eine Lampen-RID angeben.');
+          message(lightMessage, "error", "Bitte eine Lampen-RID angeben.");
           return;
         }
-        const action = document.getElementById('light-action').value;
-        const brightnessValue = document.getElementById('light-brightness').value.trim();
-        const payload = {
-          bridge_id: state.activeBridgeId,
-          light_id: lightId,
-          on: action === 'on',
-        };
-        if (brightnessValue !== '') {
-          const parsed = Number.parseInt(brightnessValue, 10);
-          if (Number.isNaN(parsed) || parsed < 0 || parsed > 100) {
-            message(lightMessage, 'error', 'Helligkeit muss zwischen 0 und 100 liegen.');
+        const action = document.getElementById("light-action").value;
+        const brightnessRaw = document
+          .getElementById("light-brightness")
+          .value.trim();
+        const payload = { on: action === "on" };
+        if (brightnessRaw !== "") {
+          const value = Number.parseInt(brightnessRaw, 10);
+          if (Number.isNaN(value) || value < 0 || value > 100) {
+            message(
+              lightMessage,
+              "error",
+              "Helligkeit muss zwischen 0 und 100 liegen."
+            );
             return;
           }
-          payload.brightness = parsed;
+          payload.brightness = value;
         }
         try {
-          await apiFetch('light_command', { method: 'POST', body: payload });
-          message(lightMessage, 'success', 'Befehl wurde gesendet.');
+          await hueFetch(`/lights/${encodeURIComponent(lightId)}/state`, {
+            method: "POST",
+            body: payload,
+          });
+          message(lightMessage, "success", "Befehl wurde an die Bridge gesendet.");
         } catch (error) {
-          message(lightMessage, 'error', `Aktion fehlgeschlagen: ${error.message}`);
+          message(lightMessage, "error", `Aktion fehlgeschlagen: ${error.message}`);
         }
       });
 
-      document.getElementById('scene-submit').addEventListener('click', async () => {
-        message(sceneMessage, '', '');
-        if (!state.activeBridgeId) {
-          message(sceneMessage, 'error', 'Bitte zuerst eine Bridge auswählen.');
+      document.getElementById("scene-submit").addEventListener("click", async () => {
+        message(sceneMessage, "", "");
+        if (!ensureBaseUrlConfigured(sceneMessage)) {
           return;
         }
-        const sceneId = document.getElementById('scene-id').value.trim();
+        if (!ensureBridgeSelected(sceneMessage)) {
+          return;
+        }
+        const sceneId = document.getElementById("scene-id").value.trim();
         if (!sceneId) {
-          message(sceneMessage, 'error', 'Bitte eine Szenen-RID angeben.');
+          message(sceneMessage, "error", "Bitte eine Szenen-RID angeben.");
           return;
         }
-        const targetValue = document.getElementById('scene-target').value.trim();
-        const payload = {
-          bridge_id: state.activeBridgeId,
-          scene_id: sceneId,
-        };
+        const targetValue = document.getElementById("scene-target").value.trim();
+        const payload = {};
         if (targetValue) {
-          const [rid, rtype] = targetValue.split('::');
+          const [rid, rtype] = targetValue.split("::");
           if (!rid || !rtype) {
-            message(sceneMessage, 'error', 'Ziel muss im Format <resource-id>::<rtype> angegeben werden.');
+            message(
+              sceneMessage,
+              "error",
+              "Bitte Ziel im Format <resource-id>::<rtype> angeben."
+            );
             return;
           }
-          payload.target_rid = rid.trim();
-          payload.target_rtype = rtype.trim();
+          payload.target_rid = rid;
+          payload.target_rtype = rtype;
         }
         try {
-          await apiFetch('scene_command', { method: 'POST', body: payload });
-          message(sceneMessage, 'success', 'Szene wurde aktiviert.');
+          await hueFetch(`/scenes/${encodeURIComponent(sceneId)}/activate`, {
+            method: "POST",
+            body: payload,
+          });
+          message(sceneMessage, "success", "Szene wurde angefordert.");
         } catch (error) {
-          message(sceneMessage, 'error', `Aktion fehlgeschlagen: ${error.message}`);
+          message(sceneMessage, "error", `Aktion fehlgeschlagen: ${error.message}`);
         }
       });
 
-      loadBridges();
+      loadBridgesButton.addEventListener("click", async () => {
+        message(bridgeMessage, "", "");
+        await loadBridges();
+      });
+
+      useDefaultBaseButton.addEventListener("click", () => {
+        baseUrlInput.value = defaultBaseUrl();
+      });
     </script>
   </body>
 </html>

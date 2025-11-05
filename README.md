@@ -61,12 +61,12 @@ mit der Hue Bridge interagieren:
 | POST    | `/scenes/{id}/activate`      | Szene aktivieren                       |
 | GET     | `/rooms?bridge_id=<id>`      | Liste aller Räume (Areas/Zonen)        |
 
-Die LoxBerry-Weboberfläche spricht den Dienst standardmäßig über
-`http://127.0.0.1:5510` an. Wenn du den Hue-Dienst auf einem anderen Host oder Port
-betreibst, kannst du dies über die Umgebungsvariablen
-`HUE_PLUGIN_SERVICE_HOST` und `HUE_PLUGIN_SERVICE_PORT` anpassen.
-Zusätzlich bleibt die CORS-Variable `HUE_PLUGIN_ALLOW_ORIGINS` verfügbar, falls du
-die REST-API dennoch direkt aus anderen Anwendungen heraus ansprechen möchtest.
+Die LoxBerry-Weboberfläche ruft den Dienst typischerweise vom gleichen Host unter
+`http://<dein-loxberry>:5510` auf. Falls du einen anderen Hostnamen oder zusätzliche
+Clients zulassen möchtest, kannst du die erlaubten CORS-Ursprünge über die
+Umgebungsvariable `HUE_PLUGIN_ALLOW_ORIGINS` (kommagetrennte Liste von URLs) steuern.
+Ohne Angabe werden alle Ursprünge akzeptiert, damit die Oberfläche auch ohne weitere
+Konfiguration funktioniert.
 
 ## Weboberfläche im LoxBerry
 
@@ -79,10 +79,10 @@ grafische Oberfläche ausliefert. Dort kannst du
 * Lampen, Räume und Szenen direkt auslesen,
 * sowie einzelne Lampen oder Szenen zum Testen schalten.
 
-Die Oberfläche lädt die Bridge-Liste automatisch und kommuniziert über einen
-PHP-Proxy mit dem lokalen REST-Dienst. Damit entfällt die manuelle Eingabe einer
-Basis-URL. Anpassungen an Host oder Port erfolgen ausschließlich über die oben
-genannten Umgebungsvariablen.
+Die Oberfläche erwartet, dass der REST-Dienst auf Port `5510` auf demselben LoxBerry
+läuft. Falls du Port oder Hostname geändert hast, lässt sich dies über das Eingabefeld
+"Basis-URL" anpassen. Nach dem Eintragen klickst du auf "Bridge-Liste laden", um die
+konfigurierten Bridges zu synchronisieren.
 
 ## Plugin-Paket für LoxBerry
 
