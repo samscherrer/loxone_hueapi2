@@ -61,12 +61,12 @@ mit der Hue Bridge interagieren:
 | POST    | `/scenes/{id}/activate`      | Szene aktivieren                       |
 | GET     | `/rooms?bridge_id=<id>`      | Liste aller Räume (Areas/Zonen)        |
 
-Die LoxBerry-Weboberfläche ruft den Dienst typischerweise vom gleichen Host unter
-`http://<dein-loxberry>:5510` auf. Falls du einen anderen Hostnamen oder zusätzliche
-Clients zulassen möchtest, kannst du die erlaubten CORS-Ursprünge über die
-Umgebungsvariable `HUE_PLUGIN_ALLOW_ORIGINS` (kommagetrennte Liste von URLs) steuern.
-Ohne Angabe werden alle Ursprünge akzeptiert, damit die Oberfläche auch ohne weitere
-Konfiguration funktioniert.
+Die LoxBerry-Weboberfläche spricht den Dienst standardmäßig über
+`http://127.0.0.1:5510` an. Wenn du den Hue-Dienst auf einem anderen Host oder Port
+betreibst, kannst du dies über die Umgebungsvariablen
+`HUE_PLUGIN_SERVICE_HOST` und `HUE_PLUGIN_SERVICE_PORT` anpassen.
+Zusätzlich bleibt die CORS-Variable `HUE_PLUGIN_ALLOW_ORIGINS` verfügbar, falls du
+die REST-API dennoch direkt aus anderen Anwendungen heraus ansprechen möchtest.
 
 ## Weboberfläche im LoxBerry
 
@@ -79,25 +79,30 @@ grafische Oberfläche ausliefert. Dort kannst du
 * Lampen, Räume und Szenen direkt auslesen,
 * sowie einzelne Lampen oder Szenen zum Testen schalten.
 
-Die Oberfläche erwartet, dass der REST-Dienst auf Port `5510` auf demselben LoxBerry
-läuft. Falls du Port oder Hostname geändert hast, lässt sich dies über das Eingabefeld
-"Basis-URL" anpassen. Nach dem Eintragen klickst du auf "Bridge-Liste laden", um die
-konfigurierten Bridges zu synchronisieren.
+Die Oberfläche lädt die Bridge-Liste automatisch und kommuniziert über einen
+PHP-Proxy mit dem lokalen REST-Dienst. Damit entfällt die manuelle Eingabe einer
+Basis-URL. Anpassungen an Host oder Port erfolgen ausschließlich über die oben
+genannten Umgebungsvariablen.
 
 ## Plugin-Paket für LoxBerry
 
 GitHub-Kompatibilität beschränkt die Bereitstellung fertiger ZIP-Archive in diesem
-Repository. Um dennoch ein installierbares Paket zu erhalten, kannst du das Archiv
-lokal selbst erzeugen. Der folgende Befehl erstellt eine ZIP-Datei mit dem korrekten
-Verzeichnispräfix für LoxBerry:
+Repository. Über das Skript `build_plugin_zip.sh` kannst du dennoch mit einem Kommando
+ein installierbares Archiv erzeugen:
 
 ```bash
-git archive --format=zip --output "LoxBerry-Plugin-PhilipsHue-<version>.zip" \
-  --prefix "LoxBerry-Plugin-PhilipsHue/" HEAD
+./build_plugin_zip.sh
 ```
 
-Anschließend lässt sich die erzeugte Datei direkt über die LoxBerry-Weboberfläche
-installieren.
+Der erzeugte Pfad (z. B. `dist/hueapiv2-<commit>.zip`) wird auf der Konsole ausgegeben
+und lässt sich direkt über die LoxBerry-Weboberfläche installieren.
+
+Alternativ kannst du das Archiv manuell bauen. Der folgende Befehl erstellt ebenfalls
+eine ZIP-Datei mit dem korrekten Verzeichnispräfix:
+
+```bash
+git archive --format=zip --output "hueapiv2-<version>.zip" --prefix "hueapiv2/" HEAD
+```
 
 Während der Installation sorgt `postroot.sh` dafür, dass ein virtuelles
 Python-Umfeld angelegt und das Plugin darin installiert wird.
