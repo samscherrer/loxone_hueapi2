@@ -215,6 +215,55 @@ function request_payload(): array
     return $payload;
 }
 
+function extract_query_param(string $value, string $parameter): string
+{
+    $trimmed = trim($value);
+    if ($trimmed === '') {
+        return '';
+    }
+
+    $candidates = [];
+
+    if (preg_match('/^https?:\/\//i', $trimmed)) {
+        $parts = parse_url($trimmed);
+        if ($parts !== false && isset($parts['query']) && is_string($parts['query'])) {
+            $candidates[] = $parts['query'];
+        }
+    }
+
+    if (strpos($trimmed, '?') !== false) {
+        $query = substr($trimmed, strpos($trimmed, '?') + 1);
+        if ($query !== false) {
+            $candidates[] = $query;
+        }
+    }
+
+    if (strpos($trimmed, '&') !== false && strpos($trimmed, '=') !== false) {
+        $candidates[] = $trimmed;
+    }
+
+    foreach ($candidates as $candidate) {
+        if (!is_string($candidate) || $candidate === '') {
+            continue;
+        }
+
+        $params = [];
+        parse_str($candidate, $params);
+        if (!is_array($params) || $params === []) {
+            continue;
+        }
+
+        if (isset($params[$parameter]) && is_string($params[$parameter])) {
+            $extracted = trim($params[$parameter]);
+            if ($extracted !== '') {
+                return $extracted;
+            }
+        }
+    }
+
+    return $trimmed;
+}
+
 /**
  * @param mixed $value
  * @return array{provided: bool, value: ?bool, valid: bool}
@@ -453,7 +502,7 @@ function handle_ajax(string $configPath): void
                 break;
 
             case 'test_connection':
-                $bridgeId = trim((string) ($_GET['bridge_id'] ?? ''));
+                $bridgeId = extract_query_param((string) ($_GET['bridge_id'] ?? ''), 'bridge_id');
                 if ($bridgeId === '') {
                     throw new RuntimeException('Es wurde keine Bridge ausgewählt.');
                 }
@@ -462,7 +511,7 @@ function handle_ajax(string $configPath): void
                 break;
 
             case 'get_resources':
-                $bridgeId = trim((string) ($_GET['bridge_id'] ?? ''));
+                $bridgeId = extract_query_param((string) ($_GET['bridge_id'] ?? ''), 'bridge_id');
                 $type = trim((string) ($_GET['type'] ?? ''));
                 if ($bridgeId === '') {
                     throw new RuntimeException('Es wurde keine Bridge ausgewählt.');
@@ -477,8 +526,8 @@ function handle_ajax(string $configPath): void
 
             case 'light_command':
                 $payload = request_payload();
-                $bridgeId = trim((string) ($payload['bridge_id'] ?? ''));
-                $lightId = trim((string) ($payload['light_id'] ?? ''));
+                $bridgeId = extract_query_param((string) ($payload['bridge_id'] ?? ''), 'bridge_id');
+                $lightId = extract_query_param((string) ($payload['light_id'] ?? ''), 'light_id');
                 if ($bridgeId === '' || $lightId === '') {
                     throw new RuntimeException('Bridge und Lampen-RID sind erforderlich.');
                 }
@@ -519,14 +568,14 @@ function handle_ajax(string $configPath): void
 
             case 'scene_command':
                 $payload = request_payload();
-                $bridgeId = trim((string) ($payload['bridge_id'] ?? ''));
-                $sceneId = trim((string) ($payload['scene_id'] ?? ''));
+                $bridgeId = extract_query_param((string) ($payload['bridge_id'] ?? ''), 'bridge_id');
+                $sceneId = extract_query_param((string) ($payload['scene_id'] ?? ''), 'scene_id');
                 if ($bridgeId === '' || $sceneId === '') {
                     throw new RuntimeException('Bridge und Szenen-RID sind erforderlich.');
                 }
                 $body = [];
                 if (!empty($payload['target_rid']) && !empty($payload['target_rtype'])) {
-                    $body['target_rid'] = (string) $payload['target_rid'];
+                    $body['target_rid'] = extract_query_param((string) $payload['target_rid'], 'target_rid');
                     $body['target_rtype'] = (string) $payload['target_rtype'];
                 }
                 $stateInfo = ['provided' => false, 'value' => null, 'valid' => true];
