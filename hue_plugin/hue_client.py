@@ -64,6 +64,20 @@ class HueBridgeClient:
 
         return self._list_resources("zone")
 
+    def get_grouped_lights(self) -> Iterable[HueResource]:
+        """Return grouped lights for rooms or zones."""
+
+        return self._list_resources("grouped_light")
+
+    def get_scene(self, scene_id: str) -> HueResource:
+        """Return a single scene resource."""
+
+        payload = self._get(f"scene/{scene_id}")
+        data = payload.get("data", [])
+        if not isinstance(data, list) or not data:
+            raise HueBridgeError("Szene wurde nicht gefunden.")
+        return HueResource.from_api(data[0])
+
     # -- mutating operations ---------------------------------------------------------
     def activate_scene(
         self,
@@ -76,6 +90,36 @@ class HueBridgeClient:
         if target_rid and target_rtype:
             body["recall"]["target"] = {"rid": target_rid, "rtype": target_rtype}
         self._put(f"scene/{scene_id}", json=body)
+
+    def deactivate_scene(
+        self,
+        scene_id: str,
+        *,
+        target_rid: Optional[str] = None,
+        target_rtype: Optional[str] = None,
+    ) -> None:
+        group_rid = target_rid
+        group_rtype = target_rtype
+
+        if not group_rid:
+            scene = self.get_scene(scene_id)
+            group = scene.data.get("group")
+            if isinstance(group, dict):
+                group_rid = group.get("rid")
+                group_rtype = group.get("rtype")
+
+        if not group_rid:
+            raise HueBridgeError(
+                "Die Szene enthält keine Gruppeninformation. Bitte ein Ziel angeben."
+            )
+
+        grouped_light_id = self._resolve_grouped_light_id(group_rid, group_rtype)
+        if not grouped_light_id:
+            raise HueBridgeError(
+                "Für das Ziel wurde kein grouped_light gefunden. Prüfe die Hue-Konfiguration."
+            )
+
+        self.set_grouped_light_state(grouped_light_id, on=False)
 
     def set_light_state(
         self,
@@ -97,10 +141,43 @@ class HueBridgeClient:
 
         self._put(f"light/{light_id}", json=body)
 
+    def set_grouped_light_state(
+        self,
+        grouped_light_id: str,
+        *,
+        on: Optional[bool] = None,
+    ) -> None:
+        body: _JSON = {}
+        if on is not None:
+            body.setdefault("on", {})["on"] = on
+
+        if not body:
+            raise ValueError("At least one state value must be provided")
+
+        self._put(f"grouped_light/{grouped_light_id}", json=body)
+
     # -- low level helpers -----------------------------------------------------------
     def _list_resources(self, resource: str) -> Iterable[HueResource]:
         payload = self._get(resource)
         return [HueResource.from_api(item) for item in payload.get("data", [])]
+
+    def _resolve_grouped_light_id(
+        self,
+        owner_rid: str,
+        owner_rtype: Optional[str] = None,
+    ) -> Optional[str]:
+        for resource in self.get_grouped_lights():
+            owner = resource.data.get("owner")
+            if not isinstance(owner, dict):
+                continue
+            rid = owner.get("rid")
+            rtype = owner.get("rtype")
+            if rid != owner_rid:
+                continue
+            if owner_rtype and rtype != owner_rtype:
+                continue
+            return resource.id
+        return None
 
     def _get(self, path: str) -> _JSON:
         response = self._request("GET", path)

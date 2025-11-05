@@ -127,40 +127,45 @@ Python-Umfeld angelegt und das Plugin darin installiert wird.
 
 ## Einbindung in Loxone
 
-Innerhalb von Loxone kann dieser Dienst beispielsweise über HTTP-Kommandos angesteuert
-werden. Die Weboberfläche zeigt dir alle relevanten IDs inklusive Raum- und Szenenbezug an.
-Mit diesen Informationen kannst du aus dem Miniserver heraus Szenen aktivieren oder Lampen
-schalten – wahlweise über das REST-Backend auf Port `5510` oder direkt über das Plugin-
-Frontend.
+Innerhalb von Loxone kann dieser Dienst über einfache HTTP-Kommandos angesteuert werden.
+Die Weboberfläche zeigt dir alle relevanten IDs inklusive Raum- und Szenenbezug an und
+erzeugt für jede Bridge direkt kopierbare URLs für virtuelle Ausgänge – sowohl für das
+Einschalten (Wert `1`) als auch zum Ausschalten (Wert `0`). So kannst du mehrere Hue Bridges
+parallel betreiben und deren Ressourcen sauber getrennt ansteuern.
 
 ### Vorgehen in Loxone (Virtueller Ausgang)
 
-1. Lege im Miniserver einen **virtuellen Ausgang** an, der auf das LoxBerry-System zeigt.
-   Als IP-Adresse verwendest du den LoxBerry-Host, der Port bleibt bei `80` (HTTP).
+1. Lege im Miniserver einen **virtuellen Ausgang** an, der auf das LoxBerry-System zeigt
+   (IP-Adresse = LoxBerry, Port = `80`).
 2. Erstelle unter diesem Ausgang einen **virtuellen Ausgangsbefehl**. Als Kommando trägst
-   du die entsprechende URL (siehe Beispiele unten) ein. Verwende `GET` und aktiviere bei
-   Bedarf die Option „Befehl bei EIN ausführen“.
-3. Setze im Plugin-Frontend die gewünschte Szene auf „Favorit“, damit du sie leicht
-   identifizieren kannst, und kopiere die dort angezeigte `scene_id` (sowie optional den
-   Ziel-Raum).
-4. Wiederhole den Schritt für Lampen oder zusätzliche Szenen. Jeder virtuelle Befehl kann
-   eine andere ID enthalten.
+   du die entsprechende URL (siehe Beispiele unten) ein. Verwende `GET` und aktiviere die
+   Optionen „Befehl bei EIN ausführen“ und „Befehl bei AUS ausführen“, falls du beide Fälle
+   bedienen möchtest.
+3. Kopiere die `light_id` bzw. `scene_id` direkt aus der Plugin-Oberfläche. Die Seite zeigt
+   unter „Licht steuern“ und „Szene aktivieren“ automatisch die passenden URLs für EIN (`1`)
+   und AUS (`0`) an.
+4. Wiederhole die Schritte für weitere Lampen oder Szenen. Durch die Bridge-Auswahl kannst du
+   unterschiedliche Hue Bridges getrennt verwalten.
 
 ### Szenen oder Lampen per HTTP-Request auslösen
 
 Für einfache Integrationen (z. B. über einen virtuellen Ausgang) kann Loxone die
-Authentifizierungs-geschützte Plugin-Seite direkt ansprechen. Beispiel zum Aktivieren einer
-Szene:
+Authentifizierungs-geschützte Plugin-Seite direkt ansprechen. Beispiel zum Aktivieren bzw.
+Ausschalten einer Szene (Wert `1` aktiviert, Wert `0` schaltet den Zielbereich aus):
 
 ```
-http://<loxberry-host>/admin/plugins/hueapiv2/index.php?ajax=1&action=scene_command&bridge_id=<bridge-id>&scene_id=<scene-rid>
+http://<loxberry-host>/admin/plugins/hueapiv2/index.php?ajax=1&action=scene_command&bridge_id=<bridge-id>&scene_id=<scene-rid>&state=1
 ```
 
 Optional kannst du einen Zielraum oder eine Zone angeben (Parameter `target_rid` und
 `target_rtype`). Damit stellst du sicher, dass die Szene in dem gewünschten Bereich
-aktiviert wird. Das Plugin antwortet mit einer JSON-Struktur; ein erfolgreicher Aufruf liefert
-`{"ok": true}`. Bei Bedarf kannst du zusätzliche Parameter (z. B. `target_rid=<room-id>` und
-`target_rtype=room`) direkt an die URL anhängen.
+aktiviert bzw. beim Ausschalten vollständig deaktiviert wird:
+
+```
+http://<loxberry-host>/admin/plugins/hueapiv2/index.php?ajax=1&action=scene_command&bridge_id=<bridge-id>&scene_id=<scene-rid>&target_rid=<room-id>&target_rtype=room&state=0
+```
+
+Das Plugin antwortet mit einer JSON-Struktur; ein erfolgreicher Aufruf liefert `{"ok": true}`.
 
 Zum Schalten einer Lampe steht derselbe Mechanismus bereit:
 
@@ -168,8 +173,9 @@ Zum Schalten einer Lampe steht derselbe Mechanismus bereit:
 http://<loxberry-host>/admin/plugins/hueapiv2/index.php?ajax=1&action=light_command&bridge_id=<bridge-id>&light_id=<light-rid>&on=1&brightness=75
 ```
 
-Die Parameter `on` (`1` oder `0`) und `brightness` (0–100) sind optional. Alternativ kannst du
-den Python-REST-Dienst weiterverwenden, wenn du lieber auf Port `5510` mit JSON arbeitest.
+Der Parameter `on` akzeptiert `1` (EIN) oder `0` (AUS); `brightness` (0–100) ist optional und
+wird nur für das Einschalten berücksichtigt. Alternativ kannst du den Python-REST-Dienst weiter-
+verwenden, wenn du lieber auf Port `5510` mit JSON arbeitest.
 
 > Tipp: In Loxone kannst du dieselbe URL auch in einem virtuellen Eingang verwenden, um
 > beispielsweise den Status eines Tasters zum Schalten einer Szene zu nutzen. Wichtig ist nur,

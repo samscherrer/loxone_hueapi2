@@ -215,6 +215,66 @@ function request_payload(): array
     return $payload;
 }
 
+/**
+ * @param mixed $value
+ * @return array{provided: bool, value: ?bool, valid: bool}
+ */
+function normalise_optional_bool($value): array
+{
+    $result = [
+        'provided' => true,
+        'value' => null,
+        'valid' => true,
+    ];
+
+    if ($value === null) {
+        $result['provided'] = false;
+        return $result;
+    }
+
+    if (is_bool($value)) {
+        $result['value'] = $value;
+        return $result;
+    }
+
+    if (is_int($value)) {
+        $result['value'] = $value !== 0;
+        return $result;
+    }
+
+    if (is_string($value)) {
+        $normalized = strtolower(trim($value));
+        if ($normalized === '') {
+            $result['provided'] = false;
+            return $result;
+        }
+
+        $map = [
+            '1' => true,
+            'true' => true,
+            'on' => true,
+            'yes' => true,
+            '0' => false,
+            'false' => false,
+            'off' => false,
+            'no' => false,
+        ];
+
+        if (array_key_exists($normalized, $map)) {
+            $result['value'] = $map[$normalized];
+            return $result;
+        }
+
+        $result['value'] = null;
+        $result['valid'] = false;
+        return $result;
+    }
+
+    $result['value'] = null;
+    $result['valid'] = false;
+    return $result;
+}
+
 function plugin_root(): string
 {
     static $resolved = null;
@@ -423,8 +483,20 @@ function handle_ajax(string $configPath): void
                     throw new RuntimeException('Bridge und Lampen-RID sind erforderlich.');
                 }
                 $body = [];
-                if (array_key_exists('on', $payload)) {
-                    $body['on'] = (bool) $payload['on'];
+                $stateInfo = ['provided' => false, 'value' => null, 'valid' => true];
+                foreach (['state', 'on', 'value'] as $key) {
+                    if (array_key_exists($key, $payload)) {
+                        $stateInfo = normalise_optional_bool($payload[$key]);
+                        break;
+                    }
+                }
+                if ($stateInfo['provided']) {
+                    if (!$stateInfo['valid']) {
+                        throw new RuntimeException('Ungültiger Wert für den Schaltzustand.');
+                    }
+                    if ($stateInfo['value'] !== null) {
+                        $body['on'] = $stateInfo['value'];
+                    }
                 }
                 if (isset($payload['brightness']) && $payload['brightness'] !== '') {
                     $value = (int) $payload['brightness'];
@@ -457,12 +529,25 @@ function handle_ajax(string $configPath): void
                     $body['target_rid'] = (string) $payload['target_rid'];
                     $body['target_rtype'] = (string) $payload['target_rtype'];
                 }
+                $stateInfo = ['provided' => false, 'value' => null, 'valid' => true];
+                foreach (['state', 'on', 'value'] as $key) {
+                    if (array_key_exists($key, $payload)) {
+                        $stateInfo = normalise_optional_bool($payload[$key]);
+                        break;
+                    }
+                }
+                if ($stateInfo['provided'] && !$stateInfo['valid']) {
+                    throw new RuntimeException('Ungültiger Wert für den Szenenstatus.');
+                }
                 $args = ['scene-command', '--bridge-id', $bridgeId, '--scene-id', $sceneId];
                 if (isset($body['target_rid'], $body['target_rtype'])) {
                     $args[] = '--target-rid';
                     $args[] = $body['target_rid'];
                     $args[] = '--target-rtype';
                     $args[] = $body['target_rtype'];
+                }
+                if ($stateInfo['provided'] && $stateInfo['value'] !== null) {
+                    $args[] = $stateInfo['value'] ? '--on' : '--off';
                 }
                 call_hue_cli($args);
                 respond_json(['ok' => true]);
@@ -637,6 +722,33 @@ header('Content-Type: text/html; charset=utf-8');
         flex-wrap: wrap;
         gap: 0.9rem;
         margin-top: 1rem;
+      }
+
+      .command-helper {
+        margin-top: 1.25rem;
+        padding: 1rem 1.2rem;
+        border-radius: 14px;
+        border: 1px dashed rgba(15, 23, 42, 0.25);
+        background: rgba(255, 255, 255, 0.88);
+        color: #0f172a;
+      }
+
+      .command-helper strong {
+        display: block;
+        font-weight: 600;
+        color: var(--accent-dark);
+        margin-bottom: 0.35rem;
+      }
+
+      .command-helper code {
+        display: block;
+        font-family: "Fira Code", "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+        word-break: break-all;
+        margin-bottom: 0.6rem;
+        padding: 0.35rem 0.5rem;
+        border-radius: 8px;
+        background: rgba(15, 23, 42, 0.08);
+        color: #0f172a;
       }
 
       .grid {
@@ -899,6 +1011,12 @@ header('Content-Type: text/html; charset=utf-8');
           <button type="button" id="light-submit">Befehl senden</button>
         </div>
         <div id="light-message" class="message"></div>
+        <div class="command-helper" id="light-command-helper">
+          <p class="muted">
+            Nachdem du eine Bridge und Lampen-RID gewählt hast, erscheinen hier die fertigen
+            HTTP-Aufrufe für einen virtuellen Ausgang in Loxone (Wert 1 = EIN, Wert 0 = AUS).
+          </p>
+        </div>
       </section>
 
       <section class="card">
@@ -917,10 +1035,24 @@ header('Content-Type: text/html; charset=utf-8');
             />
           </div>
         </div>
+        <div>
+          <label for="scene-action">Schaltzustand</label>
+          <select id="scene-action">
+            <option value="on">Aktivieren (Wert 1)</option>
+            <option value="off">Ausschalten (Wert 0)</option>
+          </select>
+        </div>
         <div class="actions">
-          <button type="button" id="scene-submit">Szene starten</button>
+          <button type="button" id="scene-submit">Aktion senden</button>
         </div>
         <div id="scene-message" class="message"></div>
+        <div class="command-helper" id="scene-command-helper">
+          <p class="muted">
+            Hier findest du nach Auswahl einer Bridge und Szene die beiden URLs für deinen
+            virtuellen Ausgang. Wert 1 aktiviert die Szene, Wert 0 schaltet den zugehörigen Raum
+            bzw. die Zone aus.
+          </p>
+        </div>
       </section>
     </main>
 
@@ -951,10 +1083,53 @@ header('Content-Type: text/html; charset=utf-8');
       const bridgeDeleteButton = document.getElementById('bridge-delete');
       const bridgeResetButton = document.getElementById('bridge-reset');
       const reloadBridgesButton = document.getElementById('reload-bridges');
+      const lightCommandHelper = document.getElementById('light-command-helper');
+      const sceneCommandHelper = document.getElementById('scene-command-helper');
+      const sceneActionSelect = document.getElementById('scene-action');
 
       const state = {
         bridges: [],
         activeBridgeId: null,
+      };
+
+      const LIGHT_HELPER_DEFAULT =
+        'Nachdem du eine Bridge und Lampen-RID gewählt hast, erscheinen hier die fertigen HTTP-Aufrufe ' +
+        'für einen virtuellen Ausgang in Loxone (Wert 1 = EIN, Wert 0 = AUS).';
+      const SCENE_HELPER_DEFAULT =
+        'Hier findest du nach Auswahl einer Bridge und Szene die beiden URLs für deinen virtuellen Ausgang. ' +
+        'Wert 1 aktiviert die Szene, Wert 0 schaltet den zugehörigen Raum bzw. die Zone aus.';
+
+      const ensureHelperMessage = (container, text) => {
+        if (!container) {
+          return;
+        }
+        container.innerHTML = '';
+        const paragraph = document.createElement('p');
+        paragraph.className = 'muted';
+        paragraph.textContent = text;
+        container.appendChild(paragraph);
+      };
+
+      const renderHelperRows = (container, intro, rows) => {
+        if (!container) {
+          return;
+        }
+        container.innerHTML = '';
+        if (intro) {
+          const info = document.createElement('p');
+          info.className = 'muted';
+          info.textContent = intro;
+          container.appendChild(info);
+        }
+        rows.forEach(({ label, url }) => {
+          const wrapper = document.createElement('div');
+          const title = document.createElement('strong');
+          title.textContent = label;
+          const code = document.createElement('code');
+          code.textContent = url;
+          wrapper.append(title, code);
+          container.appendChild(wrapper);
+        });
       };
 
       const message = (el, type, text) => {
@@ -977,6 +1152,87 @@ header('Content-Type: text/html; charset=utf-8');
         });
         return url.toString();
       };
+
+      const updateLightCommandHelper = () => {
+        if (!lightCommandHelper) {
+          return;
+        }
+        const lightId = document.getElementById('light-id').value.trim();
+        const brightnessValue = document.getElementById('light-brightness').value.trim();
+        if (!state.activeBridgeId) {
+          ensureHelperMessage(lightCommandHelper, 'Bitte zuerst eine Bridge auswählen.');
+          return;
+        }
+        if (!lightId) {
+          ensureHelperMessage(lightCommandHelper, 'Bitte eine Lampen-RID eingeben, um die URLs zu erhalten.');
+          return;
+        }
+        const baseParams = {
+          bridge_id: state.activeBridgeId,
+          light_id: lightId,
+        };
+        const onParams = { ...baseParams, on: '1' };
+        if (brightnessValue !== '') {
+          onParams.brightness = brightnessValue;
+        }
+        const offParams = { ...baseParams, on: '0' };
+        renderHelperRows(lightCommandHelper, 'URLs für den virtuellen Ausgang (GET-Befehl in Loxone):', [
+          { label: 'Virtueller Ausgang – EIN (Wert 1):', url: buildUrl('light_command', onParams) },
+          { label: 'Virtueller Ausgang – AUS (Wert 0):', url: buildUrl('light_command', offParams) },
+        ]);
+      };
+
+      const updateSceneCommandHelper = () => {
+        if (!sceneCommandHelper) {
+          return;
+        }
+        const sceneId = document.getElementById('scene-id').value.trim();
+        const targetValue = document.getElementById('scene-target').value.trim();
+        if (!state.activeBridgeId) {
+          ensureHelperMessage(sceneCommandHelper, 'Bitte zuerst eine Bridge auswählen.');
+          return;
+        }
+        if (!sceneId) {
+          ensureHelperMessage(sceneCommandHelper, 'Bitte eine Szenen-RID eingeben, um die URLs zu erhalten.');
+          return;
+        }
+        let rid = null;
+        let rtype = null;
+        if (targetValue) {
+          const [ridRaw, rtypeRaw] = targetValue.split('::');
+          if (!ridRaw || !rtypeRaw) {
+            ensureHelperMessage(
+              sceneCommandHelper,
+              'Ziel muss im Format <resource-id>::<rtype> angegeben werden, z. B. <room-id>::room.'
+            );
+            return;
+          }
+          rid = ridRaw.trim();
+          rtype = rtypeRaw.trim();
+        }
+        const baseParams = {
+          bridge_id: state.activeBridgeId,
+          scene_id: sceneId,
+        };
+        if (rid && rtype) {
+          baseParams.target_rid = rid;
+          baseParams.target_rtype = rtype;
+        }
+        const onParams = { ...baseParams, state: '1' };
+        const offParams = { ...baseParams, state: '0' };
+        renderHelperRows(sceneCommandHelper, 'Nutze diese URLs im virtuellen Ausgang von Loxone:', [
+          { label: 'Virtueller Ausgang – EIN (Wert 1):', url: buildUrl('scene_command', onParams) },
+          { label: 'Virtueller Ausgang – AUS (Wert 0):', url: buildUrl('scene_command', offParams) },
+        ]);
+      };
+
+      const updateCommandHelpers = () => {
+        updateLightCommandHelper();
+        updateSceneCommandHelper();
+      };
+
+      ensureHelperMessage(lightCommandHelper, LIGHT_HELPER_DEFAULT);
+      ensureHelperMessage(sceneCommandHelper, SCENE_HELPER_DEFAULT);
 
       const apiFetch = async (action, { method = 'GET', body, params = {} } = {}) => {
         const options = {
@@ -1078,6 +1334,7 @@ header('Content-Type: text/html; charset=utf-8');
         state.activeBridgeId = bridgeId;
         renderBridgeSelect();
         renderBridgeList();
+        updateCommandHelpers();
       };
 
       const resetBridgeForm = () => {
@@ -1116,12 +1373,14 @@ header('Content-Type: text/html; charset=utf-8');
           }
           renderBridgeSelect();
           renderBridgeList();
+          updateCommandHelpers();
         } catch (error) {
           message(bridgeMessage, 'error', error.message);
           state.bridges = [];
           state.activeBridgeId = null;
           renderBridgeSelect();
           renderBridgeList();
+          updateCommandHelpers();
         }
       };
 
@@ -1183,6 +1442,11 @@ header('Content-Type: text/html; charset=utf-8');
         message(bridgeMessage, '', '');
         await loadBridges();
       });
+
+      document.getElementById('light-id').addEventListener('input', updateLightCommandHelper);
+      document.getElementById('light-brightness').addEventListener('input', updateLightCommandHelper);
+      document.getElementById('scene-id').addEventListener('input', updateSceneCommandHelper);
+      document.getElementById('scene-target').addEventListener('input', updateSceneCommandHelper);
 
       document.getElementById('test-connection').addEventListener('click', async () => {
         message(connectionMessage, '', '');
@@ -1363,6 +1627,7 @@ header('Content-Type: text/html; charset=utf-8');
           return;
         }
         const targetValue = document.getElementById('scene-target').value.trim();
+        const actionValue = sceneActionSelect ? sceneActionSelect.value : 'on';
         const payload = {
           bridge_id: state.activeBridgeId,
           scene_id: sceneId,
@@ -1376,14 +1641,21 @@ header('Content-Type: text/html; charset=utf-8');
           payload.target_rid = rid.trim();
           payload.target_rtype = rtype.trim();
         }
+        if (sceneActionSelect) {
+          payload.state = actionValue === 'off' ? 0 : 1;
+        }
         try {
           await apiFetch('scene_command', { method: 'POST', body: payload });
-          message(sceneMessage, 'success', 'Szene wurde aktiviert.');
+          const successMessage = actionValue === 'off'
+            ? 'Zugehöriger Raum wurde ausgeschaltet.'
+            : 'Szene wurde aktiviert.';
+          message(sceneMessage, 'success', successMessage);
         } catch (error) {
           message(sceneMessage, 'error', `Aktion fehlgeschlagen: ${error.message}`);
         }
       });
 
+      updateCommandHelpers();
       loadBridges();
     </script>
   </body>

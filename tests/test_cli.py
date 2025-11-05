@@ -190,11 +190,39 @@ def test_cli_scene_command(monkeypatch, tmp_path):
         scene_id="scene-1",
         target_rid="group-1",
         target_rtype="room",
+        state=None,
     )
 
     result = cli.command_scene_command(args)
     assert result == {"ok": True}
     assert calls == [("scene-1", "group-1", "room")]
+
+
+def test_cli_scene_command_off(monkeypatch, tmp_path):
+    config_path = write_config(tmp_path)
+    calls = []
+
+    class DummyClient:
+        def __init__(self, config):
+            pass
+
+        def deactivate_scene(self, scene_id, *, target_rid=None, target_rtype=None):
+            calls.append((scene_id, target_rid, target_rtype))
+
+    monkeypatch.setattr(cli, "HueBridgeClient", DummyClient)
+
+    args = Namespace(
+        config=str(config_path),
+        bridge_id="bridge-1",
+        scene_id="scene-1",
+        target_rid=None,
+        target_rtype=None,
+        state=False,
+    )
+
+    result = cli.command_scene_command(args)
+    assert result == {"ok": True}
+    assert calls == [("scene-1", None, None)]
 
 
 def test_cli_test_connection_failure(monkeypatch, tmp_path):

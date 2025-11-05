@@ -163,11 +163,19 @@ def command_scene_command(args: argparse.Namespace) -> Dict[str, Any]:
     client = _client(bridge)
 
     try:
-        client.activate_scene(
-            args.scene_id,
-            target_rid=args.target_rid,
-            target_rtype=args.target_rtype,
-        )
+        state = True if args.state is None else args.state
+        if state:
+            client.activate_scene(
+                args.scene_id,
+                target_rid=args.target_rid,
+                target_rtype=args.target_rtype,
+            )
+        else:
+            client.deactivate_scene(
+                args.scene_id,
+                target_rid=args.target_rid,
+                target_rtype=args.target_rtype,
+            )
     except HueBridgeError as exc:
         raise SystemExit(str(exc)) from exc
 
@@ -223,6 +231,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser_scene.add_argument("--scene-id", dest="scene_id", required=True)
     parser_scene.add_argument("--target-rid", dest="target_rid", default=None)
     parser_scene.add_argument("--target-rtype", dest="target_rtype", default=None)
+    scene_state = parser_scene.add_mutually_exclusive_group()
+    scene_state.add_argument("--on", dest="state", action="store_const", const=True)
+    scene_state.add_argument("--off", dest="state", action="store_const", const=False)
+    parser_scene.set_defaults(state=None)
 
     return parser
 

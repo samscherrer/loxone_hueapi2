@@ -95,6 +95,96 @@ def test_set_light_state_validates(client: HueBridgeClient) -> None:
     assert request_body == {"on": {"on": True}, "dimming": {"brightness": 50}}
 
 
+@responses.activate
+def test_deactivate_scene_uses_grouped_light(client: HueBridgeClient) -> None:
+    responses.add(
+        responses.GET,
+        "http://1.2.3.4/clip/v2/resource/scene/scene-id",
+        json={
+            "data": [
+                {
+                    "id": "scene-id",
+                    "type": "scene",
+                    "metadata": {"name": "Relax"},
+                    "group": {"rid": "room-1", "rtype": "room"},
+                }
+            ]
+        },
+        status=200,
+    )
+    responses.add(
+        responses.GET,
+        "http://1.2.3.4/clip/v2/resource/grouped_light",
+        json={
+            "data": [
+                {
+                    "id": "grouped-1",
+                    "type": "grouped_light",
+                    "metadata": {},
+                    "owner": {"rid": "room-1", "rtype": "room"},
+                }
+            ]
+        },
+        status=200,
+    )
+    responses.add(
+        responses.PUT,
+        "http://1.2.3.4/clip/v2/resource/grouped_light/grouped-1",
+        json={},
+        status=200,
+    )
+
+    client.deactivate_scene("scene-id")
+
+    import json
+
+    body = responses.calls[-1].request.body
+    if isinstance(body, bytes):
+        body = body.decode()
+    payload = json.loads(body)
+    assert payload == {"on": {"on": False}}
+
+
+@responses.activate
+def test_deactivate_scene_requires_group(client: HueBridgeClient) -> None:
+    responses.add(
+        responses.GET,
+        "http://1.2.3.4/clip/v2/resource/scene/scene-id",
+        json={"data": [{"id": "scene-id", "type": "scene", "metadata": {}}]},
+        status=200,
+    )
+
+    with pytest.raises(HueBridgeError):
+        client.deactivate_scene("scene-id")
+
+
+@responses.activate
+def test_deactivate_scene_with_target(client: HueBridgeClient) -> None:
+    responses.add(
+        responses.GET,
+        "http://1.2.3.4/clip/v2/resource/grouped_light",
+        json={
+            "data": [
+                {
+                    "id": "grouped-1",
+                    "type": "grouped_light",
+                    "metadata": {},
+                    "owner": {"rid": "zone-1", "rtype": "zone"},
+                }
+            ]
+        },
+        status=200,
+    )
+    responses.add(
+        responses.PUT,
+        "http://1.2.3.4/clip/v2/resource/grouped_light/grouped-1",
+        json={},
+        status=200,
+    )
+
+    client.deactivate_scene("scene-id", target_rid="zone-1", target_rtype="zone")
+
+
 def test_get_lights_ssl_error(monkeypatch: pytest.MonkeyPatch, client: HueBridgeClient) -> None:
     def raise_ssl(*args: object, **kwargs: object) -> None:
         raise requests.exceptions.SSLError("certificate verify failed")
