@@ -565,7 +565,7 @@ function handle_ajax(string $configPath): void
 
 $configPath = plugin_config_path();
 
-if (isset($_GET['ajax'])) {
+if (isset($_GET['ajax']) || (isset($_GET['action']) && $_GET['action'] !== '')) {
     handle_ajax($configPath);
     return;
 }
