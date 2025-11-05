@@ -10,6 +10,8 @@ einen kleinen REST-Server lassen sich Lampen, Szenen und Räume abfragen sowie A
 * Abfrage von Hue-Lampen, -Szenen und -Räumen über die REST-Schnittstelle.
 * Aktivieren von Szenen und Setzen grundlegender Lampen-Parameter (Ein/Aus, Helligkeit).
 * Verwaltung mehrerer Hue Bridges samt Application-/Client-Key direkt in der Weboberfläche.
+* Kontextbezogene Anzeige: Szenen zeigen den verknüpften Raum, Lampen listen beteiligte Räume
+  und Szenen auf.
 * Konfigurationsdatei und Umgebungsvariable zur einfachen Anpassung auf dem LoxBerry.
 
 ## Vorbereitung
@@ -126,8 +128,33 @@ Python-Umfeld angelegt und das Plugin darin installiert wird.
 ## Einbindung in Loxone
 
 Innerhalb von Loxone kann dieser Dienst beispielsweise über HTTP-Kommandos angesteuert
-werden. Durch die JSON-Antworten lassen sich die IDs der benötigten Lampen oder Szenen
-ermitteln und anschließend gezielt schalten.
+werden. Die Weboberfläche zeigt dir alle relevanten IDs inklusive Raum- und Szenenbezug an.
+Mit diesen Informationen kannst du aus dem Miniserver heraus Szenen aktivieren oder Lampen
+schalten – wahlweise über das REST-Backend auf Port `5510` oder direkt über das Plugin-
+Frontend.
+
+### Szenen oder Lampen per HTTP-Request auslösen
+
+Für einfache Integrationen (z. B. über einen virtuellen Ausgang) kann Loxone die
+Authentifizierungs-geschützte Plugin-Seite direkt ansprechen. Beispiel zum Aktivieren einer
+Szene:
+
+```
+http://<loxberry-host>/admin/plugins/hueapiv2/index.php?ajax=1&action=scene_command&bridge_id=<bridge-id>&scene_id=<scene-rid>
+```
+
+Optional kannst du einen Zielraum oder eine Zone angeben (Parameter `target_rid` und
+`target_rtype`). Das Plugin antwortet mit einer JSON-Struktur; ein erfolgreicher Aufruf liefert
+`{"ok": true}`.
+
+Zum Schalten einer Lampe steht derselbe Mechanismus bereit:
+
+```
+http://<loxberry-host>/admin/plugins/hueapiv2/index.php?ajax=1&action=light_command&bridge_id=<bridge-id>&light_id=<light-rid>&on=1&brightness=75
+```
+
+Die Parameter `on` (`1` oder `0`) und `brightness` (0–100) sind optional. Alternativ kannst du
+den Python-REST-Dienst weiterverwenden, wenn du lieber auf Port `5510` mit JSON arbeitest.
 
 ## Tests
 

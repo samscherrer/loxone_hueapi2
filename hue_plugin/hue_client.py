@@ -52,6 +52,11 @@ class HueBridgeClient:
     def get_rooms(self) -> Iterable[HueResource]:
         return self._list_resources("room")
 
+    def get_zones(self) -> Iterable[HueResource]:
+        """Return all Hue zones."""
+
+        return self._list_resources("zone")
+
     # -- mutating operations ---------------------------------------------------------
     def activate_scene(
         self,

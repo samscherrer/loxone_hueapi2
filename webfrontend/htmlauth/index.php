@@ -191,6 +191,30 @@ function read_json_body(): array
     return $decoded;
 }
 
+function request_payload(): array
+{
+    $method = strtoupper($_SERVER['REQUEST_METHOD'] ?? 'GET');
+    if (in_array($method, ['POST', 'PUT', 'PATCH'], true)) {
+        $body = read_json_body();
+        if ($body !== []) {
+            return $body;
+        }
+    }
+
+    $payload = [];
+    foreach ($_GET as $key => $value) {
+        if ($key === 'ajax' || $key === 'action') {
+            continue;
+        }
+        if (is_array($value)) {
+            continue;
+        }
+        $payload[$key] = $value;
+    }
+
+    return $payload;
+}
+
 function plugin_root(): string
 {
     static $resolved = null;
@@ -392,7 +416,7 @@ function handle_ajax(string $configPath): void
                 break;
 
             case 'light_command':
-                $payload = read_json_body();
+                $payload = request_payload();
                 $bridgeId = trim((string) ($payload['bridge_id'] ?? ''));
                 $lightId = trim((string) ($payload['light_id'] ?? ''));
                 if ($bridgeId === '' || $lightId === '') {
@@ -422,7 +446,7 @@ function handle_ajax(string $configPath): void
                 break;
 
             case 'scene_command':
-                $payload = read_json_body();
+                $payload = request_payload();
                 $bridgeId = trim((string) ($payload['bridge_id'] ?? ''));
                 $sceneId = trim((string) ($payload['scene_id'] ?? ''));
                 if ($bridgeId === '' || $sceneId === '') {
@@ -678,6 +702,12 @@ header('Content-Type: text/html; charset=utf-8');
         color: var(--accent-dark);
         font-size: 0.8rem;
         font-weight: 600;
+      }
+
+      .resource-detail {
+        margin-top: 0.2rem;
+        font-size: 0.85rem;
+        color: rgba(15, 23, 42, 0.7);
       }
 
       .message {
@@ -1168,6 +1198,46 @@ header('Content-Type: text/html; charset=utf-8');
         }
       });
 
+      const summariseNames = (items) => {
+        if (!Array.isArray(items) || !items.length) {
+          return null;
+        }
+        const names = items
+          .map((entry) => {
+            if (!entry) {
+              return null;
+            }
+            if (typeof entry === 'string') {
+              const trimmed = entry.trim();
+              return trimmed !== '' ? trimmed : null;
+            }
+            if (typeof entry === 'object') {
+              const value = typeof entry.name === 'string' && entry.name.trim() !== ''
+                ? entry.name.trim()
+                : typeof entry.id === 'string'
+                  ? entry.id.trim()
+                  : null;
+              return value && value !== '' ? value : null;
+            }
+            return null;
+          })
+          .filter((value) => typeof value === 'string' && value !== '');
+        if (!names.length) {
+          return null;
+        }
+        return Array.from(new Set(names)).join(', ');
+      };
+
+      const appendDetailLine = (cell, text) => {
+        if (!text) {
+          return;
+        }
+        const detail = document.createElement('div');
+        detail.className = 'resource-detail';
+        detail.textContent = text;
+        cell.appendChild(detail);
+      };
+
       const renderResources = (items) => {
         const tbody = document.createElement('tbody');
         if (!items || !items.length) {
@@ -1182,7 +1252,28 @@ header('Content-Type: text/html; charset=utf-8');
           items.forEach((item) => {
             const row = document.createElement('tr');
             const nameCell = document.createElement('td');
-            nameCell.textContent = item.name || '(ohne Namen)';
+            const nameLine = document.createElement('div');
+            nameLine.textContent = item.name || '(ohne Namen)';
+            nameCell.appendChild(nameLine);
+
+            if (item.group && typeof item.group === 'object') {
+              const groupName = item.group.name || item.group.rid;
+              if (groupName) {
+                const label = item.group.rtype === 'zone' ? 'Zone' : 'Raum';
+                appendDetailLine(nameCell, `${label}: ${groupName}`);
+              }
+            }
+
+            const roomsSummary = summariseNames(item.rooms);
+            if (roomsSummary) {
+              appendDetailLine(nameCell, `Räume: ${roomsSummary}`);
+            }
+
+            const scenesSummary = summariseNames(item.scenes);
+            if (scenesSummary) {
+              appendDetailLine(nameCell, `Szenen: ${scenesSummary}`);
+            }
+
             const idCell = document.createElement('td');
             idCell.textContent = item.id || '';
             const typeCell = document.createElement('td');

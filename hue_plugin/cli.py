@@ -4,7 +4,8 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-from typing import Any, Dict, Iterable
+from collections import defaultdict
+from typing import Any, Dict, Iterable, List
 
 from .config import ConfigError, HueBridgeConfig, PluginConfig, load_config
 from .hue_client import HueBridgeClient, HueBridgeError, HueResource
@@ -38,6 +39,11 @@ def _resource_to_dict(resource: HueResource) -> Dict[str, Any]:
     }
 
 
+def _resource_name(resource: HueResource) -> str | None:
+    name = resource.metadata.get("name")
+    return name if isinstance(name, str) else None
+
+
 def command_test_connection(args: argparse.Namespace) -> Dict[str, Any]:
     config = _plugin_config(args.config)
     bridge = _bridge_config(config, args.bridge_id)
@@ -61,11 +67,77 @@ def command_list_resources(args: argparse.Namespace) -> Dict[str, Any]:
     }[args.type]
 
     try:
-        resources = [_resource_to_dict(item) for item in getter()]
+        resources = list(getter())
     except HueBridgeError as exc:
         raise SystemExit(str(exc)) from exc
 
-    return {"items": resources}
+    items = [_resource_to_dict(item) for item in resources]
+
+    if args.type == "scenes":
+        group_lookup: Dict[str, Dict[str, str | None]] = {}
+        for room in client.get_rooms():
+            group_lookup[room.id] = {"name": _resource_name(room), "type": "room"}
+        for zone in client.get_zones():
+            group_lookup[zone.id] = {"name": _resource_name(zone), "type": "zone"}
+
+        for resource, item in zip(resources, items):
+            group = resource.data.get("group")
+            details: Dict[str, Any] | None = None
+            if isinstance(group, dict):
+                rid = group.get("rid")
+                rtype = group.get("rtype")
+                details = {"rid": rid, "rtype": rtype, "name": None}
+                if isinstance(rid, str) and rid in group_lookup:
+                    resolved = group_lookup[rid]
+                    details["name"] = resolved.get("name")
+                    details["rtype"] = resolved.get("type") or rtype
+            item["group"] = details
+
+    if args.type == "lights":
+        room_lookup: Dict[str, List[Dict[str, str | None]]] = defaultdict(list)
+        for room in client.get_rooms():
+            room_name = _resource_name(room)
+            services = room.data.get("services")
+            if not isinstance(services, list):
+                continue
+            for service in services:
+                if not isinstance(service, dict):
+                    continue
+                if service.get("rtype") != "light":
+                    continue
+                rid = service.get("rid")
+                if not isinstance(rid, str):
+                    continue
+                info = {"id": room.id, "name": room_name}
+                if info not in room_lookup[rid]:
+                    room_lookup[rid].append(info)
+
+        scene_lookup: Dict[str, List[Dict[str, str | None]]] = defaultdict(list)
+        for scene in client.get_scenes():
+            scene_name = _resource_name(scene)
+            actions = scene.data.get("actions")
+            if not isinstance(actions, list):
+                continue
+            for action in actions:
+                if not isinstance(action, dict):
+                    continue
+                target = action.get("target")
+                if not isinstance(target, dict):
+                    continue
+                if target.get("rtype") != "light":
+                    continue
+                rid = target.get("rid")
+                if not isinstance(rid, str):
+                    continue
+                info = {"id": scene.id, "name": scene_name}
+                if info not in scene_lookup[rid]:
+                    scene_lookup[rid].append(info)
+
+        for resource, item in zip(resources, items):
+            item["rooms"] = room_lookup.get(resource.id, [])
+            item["scenes"] = scene_lookup.get(resource.id, [])
+
+    return {"items": items}
 
 
 def command_light_command(args: argparse.Namespace) -> Dict[str, Any]:

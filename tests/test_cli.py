@@ -25,7 +25,7 @@ def write_config(tmp_path):
     return path
 
 
-def test_cli_list_resources(monkeypatch, tmp_path, capsys):
+def test_cli_list_lights_includes_relationships(monkeypatch, tmp_path, capsys):
     config_path = write_config(tmp_path)
 
     class DummyClient:
@@ -42,11 +42,32 @@ def test_cli_list_resources(monkeypatch, tmp_path, capsys):
                 )
             ]
 
-        def get_scenes(self):  # pragma: no cover - not expected here
-            raise AssertionError
+        def get_rooms(self):
+            return [
+                HueResource(
+                    id="room-1",
+                    type="room",
+                    metadata={"name": "Wohnzimmer"},
+                    data={"services": [{"rid": "light-1", "rtype": "light"}]},
+                )
+            ]
 
-        def get_rooms(self):  # pragma: no cover - not expected here
-            raise AssertionError
+        def get_scenes(self):
+            return [
+                HueResource(
+                    id="scene-1",
+                    type="scene",
+                    metadata={"name": "Relax"},
+                    data={
+                        "actions": [
+                            {"target": {"rid": "light-1", "rtype": "light"}},
+                        ]
+                    },
+                )
+            ]
+
+        def get_zones(self):  # pragma: no cover - not used in this test
+            return []
 
     monkeypatch.setattr(cli, "HueBridgeClient", DummyClient)
 
@@ -62,8 +83,66 @@ def test_cli_list_resources(monkeypatch, tmp_path, capsys):
 
     assert exit_code == 0
     payload = json.loads(capsys.readouterr().out)
-    assert payload["items"][0]["id"] == "light-1"
-    assert payload["items"][0]["name"] == "Test Light"
+    item = payload["items"][0]
+    assert item["id"] == "light-1"
+    assert item["name"] == "Test Light"
+    assert item["rooms"] == [{"id": "room-1", "name": "Wohnzimmer"}]
+    assert item["scenes"] == [{"id": "scene-1", "name": "Relax"}]
+
+
+def test_cli_list_scenes_includes_group(monkeypatch, tmp_path, capsys):
+    config_path = write_config(tmp_path)
+
+    class DummyClient:
+        def __init__(self, config):
+            assert config.id == "bridge-1"
+
+        def get_scenes(self):
+            return [
+                HueResource(
+                    id="scene-1",
+                    type="scene",
+                    metadata={"name": "Sunset"},
+                    data={"group": {"rid": "room-1", "rtype": "room"}},
+                )
+            ]
+
+        def get_rooms(self):
+            return [
+                HueResource(
+                    id="room-1",
+                    type="room",
+                    metadata={"name": "Wohnzimmer"},
+                    data={"services": []},
+                )
+            ]
+
+        def get_zones(self):
+            return []
+
+        def get_lights(self):  # pragma: no cover - not expected here
+            raise AssertionError
+
+    monkeypatch.setattr(cli, "HueBridgeClient", DummyClient)
+
+    exit_code = cli.main([
+        "--config",
+        str(config_path),
+        "list-resources",
+        "--type",
+        "scenes",
+        "--bridge-id",
+        "bridge-1",
+    ])
+
+    assert exit_code == 0
+    payload = json.loads(capsys.readouterr().out)
+    item = payload["items"][0]
+    assert item["group"] == {
+        "rid": "room-1",
+        "rtype": "room",
+        "name": "Wohnzimmer",
+    }
 
 
 def test_cli_light_command(monkeypatch, tmp_path):
