@@ -288,7 +288,10 @@ header('Content-Type: text/html; charset=utf-8');
           Hue Bridges. Du kannst mehrere Bridges anlegen und später im Interface
           auswählen.
         </p>
-        <div id="bridge-list" class="muted">Bridges werden geladen …</div>
+        <div id="bridge-list" class="muted">
+          Noch keine Verbindung zur Hue-Bridge-API hergestellt. Gib unten die
+          Basis-URL ein und lade anschließend die Bridge-Liste.
+        </div>
         <form id="bridge-form" class="grid">
           <input id="bridge-id" type="hidden" />
           <div class="grid two">
@@ -353,8 +356,14 @@ header('Content-Type: text/html; charset=utf-8');
         <label for="base-url">Basis-URL</label>
         <input id="base-url" type="text" placeholder="http://loxberry:5510" />
         <div class="actions">
-          <button id="test-connection">Verbindung testen</button>
-          <button id="open-docs" class="secondary">API-Dokumentation öffnen</button>
+          <button type="button" id="load-bridges">Bridge-Liste laden</button>
+          <button type="button" id="test-connection">Verbindung testen</button>
+          <button type="button" id="use-default-base" class="secondary">
+            Standard-Adresse übernehmen
+          </button>
+          <button type="button" id="open-docs" class="secondary">
+            API-Dokumentation öffnen
+          </button>
         </div>
         <div id="connection-message" class="message"></div>
       </section>
@@ -461,6 +470,8 @@ header('Content-Type: text/html; charset=utf-8');
       const bridgeMessage = document.getElementById("bridge-message");
       const bridgeDeleteButton = document.getElementById("bridge-delete");
       const bridgeResetButton = document.getElementById("bridge-reset");
+      const loadBridgesButton = document.getElementById("load-bridges");
+      const useDefaultBaseButton = document.getElementById("use-default-base");
       const connectionMessage = document.getElementById("connection-message");
       const resourceMessage = document.getElementById("resource-message");
       const lightMessage = document.getElementById("light-message");
@@ -468,6 +479,7 @@ header('Content-Type: text/html; charset=utf-8');
 
       let bridges = [];
       let activeBridgeId = null;
+      let hasAttemptedBridgeLoad = false;
 
       const message = (el, type, text) => {
         if (!el) {
@@ -483,22 +495,31 @@ header('Content-Type: text/html; charset=utf-8');
         return `http://${hostname}:5510`;
       };
 
-      baseUrlInput.value = defaultBaseUrl();
+      const readBaseUrl = () => baseUrlInput.value.trim().replace(/\/$/, "");
 
-      const getBaseUrl = () => {
-        let base = baseUrlInput.value.trim();
-        if (!base) {
-          base = defaultBaseUrl();
-          baseUrlInput.value = base;
+      const ensureBaseUrlConfigured = (targetMessage) => {
+        const value = readBaseUrl();
+        if (!value) {
+          message(
+            targetMessage,
+            "error",
+            "Bitte gib zuerst die Basis-URL des Hue-Dienstes ein."
+          );
+          baseUrlInput.focus();
+          return null;
         }
-        return base.replace(/\/$/, "");
+        return value;
       };
 
       const apiFetch = async (
         path,
         { method = "GET", body, includeBridge = false } = {}
       ) => {
-        const url = new URL(`${getBaseUrl()}${path}`);
+        const base = readBaseUrl();
+        if (!base) {
+          throw new Error("Keine Basis-URL konfiguriert.");
+        }
+        const url = new URL(`${base}${path}`);
         if (includeBridge && activeBridgeId) {
           url.searchParams.set("bridge_id", activeBridgeId);
         }
@@ -546,7 +567,9 @@ header('Content-Type: text/html; charset=utf-8');
         if (!bridges.length) {
           bridgeSelect.disabled = true;
           const option = document.createElement("option");
-          option.textContent = "Keine Bridge konfiguriert";
+          option.textContent = hasAttemptedBridgeLoad
+            ? "Keine Bridge konfiguriert"
+            : "Bridge-Liste noch nicht geladen";
           option.disabled = true;
           option.value = "";
           option.selected = true;
@@ -569,8 +592,9 @@ header('Content-Type: text/html; charset=utf-8');
 
       const renderBridgeList = () => {
         if (!bridges.length) {
-          bridgeList.innerHTML =
-            "<p class=\"muted\">Noch keine Bridge hinterlegt. Nutze das Formular, um eine Verbindung anzulegen.</p>";
+          bridgeList.innerHTML = hasAttemptedBridgeLoad
+            ? "<p class=\"muted\">Noch keine Bridge hinterlegt. Nutze das Formular, um eine Verbindung anzulegen.</p>"
+            : "<p class=\"muted\">Bridge-Liste noch nicht geladen. Gib unten die Basis-URL ein und klicke auf \"Bridge-Liste laden\".</p>";
           return;
         }
         const list = document.createElement("ul");
@@ -653,6 +677,9 @@ header('Content-Type: text/html; charset=utf-8');
       });
 
       bridgeDeleteButton.addEventListener("click", async () => {
+        if (!ensureBaseUrlConfigured(bridgeMessage)) {
+          return;
+        }
         const bridgeId = bridgeIdField.value;
         if (!bridgeId) {
           return;
@@ -678,6 +705,9 @@ header('Content-Type: text/html; charset=utf-8');
 
       bridgeForm.addEventListener("submit", async (event) => {
         event.preventDefault();
+        if (!ensureBaseUrlConfigured(bridgeMessage)) {
+          return;
+        }
         const bridgeId = bridgeIdField.value.trim() || null;
         const payload = {
           name: bridgeNameInput.value.trim() || null,
@@ -722,7 +752,22 @@ header('Content-Type: text/html; charset=utf-8');
         setActiveBridge(event.target.value);
       });
 
+      baseUrlInput.addEventListener("change", () => {
+        hasAttemptedBridgeLoad = false;
+        bridges = [];
+        activeBridgeId = null;
+        renderBridgeSelect();
+        renderBridgeList();
+      });
+
       const loadBridges = async () => {
+        if (!ensureBaseUrlConfigured(bridgeMessage)) {
+          renderBridgeList();
+          return;
+        }
+        hasAttemptedBridgeLoad = true;
+        bridgeList.innerHTML =
+          "<p class=\"muted\">Bridge-Liste wird geladen …</p>";
         try {
           const data = await apiFetch("/config/bridges");
           bridges = Array.isArray(data) ? data : [];
@@ -786,6 +831,9 @@ header('Content-Type: text/html; charset=utf-8');
 
       document.getElementById("test-connection").addEventListener("click", async () => {
         message(connectionMessage, "", "");
+        if (!ensureBaseUrlConfigured(connectionMessage)) {
+          return;
+        }
         if (!ensureBridgeSelected(connectionMessage)) {
           return;
         }
@@ -802,12 +850,25 @@ header('Content-Type: text/html; charset=utf-8');
       });
 
       document.getElementById("open-docs").addEventListener("click", () => {
-        window.open(`${getBaseUrl()}/docs`, "_blank", "noopener");
+        const base = readBaseUrl();
+        if (!base) {
+          message(
+            connectionMessage,
+            "error",
+            "Bitte gib zuerst die Basis-URL des Hue-Dienstes ein."
+          );
+          baseUrlInput.focus();
+          return;
+        }
+        window.open(`${base}/docs`, "_blank", "noopener");
       });
 
       document.querySelectorAll(".load-resource").forEach((button) => {
         button.addEventListener("click", async () => {
           message(resourceMessage, "", "");
+          if (!ensureBaseUrlConfigured(resourceMessage)) {
+            return;
+          }
           if (!ensureBridgeSelected(resourceMessage)) {
             return;
           }
@@ -827,6 +888,9 @@ header('Content-Type: text/html; charset=utf-8');
 
       document.getElementById("light-submit").addEventListener("click", async () => {
         message(lightMessage, "", "");
+        if (!ensureBaseUrlConfigured(lightMessage)) {
+          return;
+        }
         if (!ensureBridgeSelected(lightMessage)) {
           return;
         }
@@ -865,6 +929,9 @@ header('Content-Type: text/html; charset=utf-8');
 
       document.getElementById("scene-submit").addEventListener("click", async () => {
         message(sceneMessage, "", "");
+        if (!ensureBaseUrlConfigured(sceneMessage)) {
+          return;
+        }
         if (!ensureBridgeSelected(sceneMessage)) {
           return;
         }
@@ -899,7 +966,14 @@ header('Content-Type: text/html; charset=utf-8');
         }
       });
 
-      loadBridges();
+      loadBridgesButton.addEventListener("click", async () => {
+        message(bridgeMessage, "", "");
+        await loadBridges();
+      });
+
+      useDefaultBaseButton.addEventListener("click", () => {
+        baseUrlInput.value = defaultBaseUrl();
+      });
     </script>
   </body>
 </html>

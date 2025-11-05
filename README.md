@@ -81,7 +81,8 @@ grafische Oberfläche ausliefert. Dort kannst du
 
 Die Oberfläche erwartet, dass der REST-Dienst auf Port `5510` auf demselben LoxBerry
 läuft. Falls du Port oder Hostname geändert hast, lässt sich dies über das Eingabefeld
-"Basis-URL" anpassen.
+"Basis-URL" anpassen. Nach dem Eintragen klickst du auf "Bridge-Liste laden", um die
+konfigurierten Bridges zu synchronisieren.
 
 ## Plugin-Paket für LoxBerry
 
