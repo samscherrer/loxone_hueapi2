@@ -626,6 +626,7 @@ $pluginFolder = end($segments);
 if (!is_string($pluginFolder) || $pluginFolder === '') {
     $pluginFolder = 'hueapiv2';
 }
+$adminBasePath = '/admin/plugins/' . $pluginFolder . '/index.php';
 $publicBasePath = '/plugins/' . $pluginFolder . '/index.php';
 
 header('Content-Type: text/html; charset=utf-8');
@@ -809,6 +810,13 @@ header('Content-Type: text/html; charset=utf-8');
         color: #0f172a;
       }
 
+      .form-note {
+        font-size: 0.85rem;
+        line-height: 1.4;
+        color: rgba(15, 23, 42, 0.65);
+        margin: 0.5rem 0 0;
+      }
+
       .grid {
         display: grid;
         gap: 1.1rem;
@@ -906,7 +914,10 @@ header('Content-Type: text/html; charset=utf-8');
       }
     </style>
   </head>
-  <body data-api-base="<?= htmlspecialchars($publicBasePath, ENT_QUOTES, 'UTF-8'); ?>">
+<body
+  data-api-base="<?= htmlspecialchars($publicBasePath, ENT_QUOTES, 'UTF-8'); ?>"
+  data-admin-base="<?= htmlspecialchars($adminBasePath, ENT_QUOTES, 'UTF-8'); ?>"
+>
     <header>
       <h1>Philips Hue API v2 Bridge</h1>
       <p>
@@ -1047,6 +1058,54 @@ header('Content-Type: text/html; charset=utf-8');
       </section>
 
       <section class="card">
+        <h2>Loxone-Ausgänge vorbereiten</h2>
+        <p class="muted">
+          Wähle den Pfad für deine Befehle und hinterlege optional Zugangsdaten, falls der
+          Administrationsbereich des LoxBerry per HTTP-Auth geschützt ist. Die Angaben werden nur
+          für die erzeugten URLs verwendet.
+        </p>
+        <div class="grid two">
+          <div>
+            <label for="command-base-path">Basis-URL</label>
+            <select id="command-base-path">
+              <option value="public" selected>
+                Öffentlich (ohne Login) – <?= htmlspecialchars($publicBasePath, ENT_QUOTES, 'UTF-8'); ?>
+              </option>
+              <option value="admin">
+                Administrationsbereich (mit Login) – <?= htmlspecialchars($adminBasePath, ENT_QUOTES, 'UTF-8'); ?>
+              </option>
+            </select>
+          </div>
+          <div>
+            <label for="loxone-auth-user">Benutzername (optional)</label>
+            <input
+              type="text"
+              id="loxone-auth-user"
+              placeholder="z. B. loxberry"
+              autocomplete="off"
+            />
+          </div>
+        </div>
+        <div class="grid two">
+          <div>
+            <label for="loxone-auth-password">Passwort (optional)</label>
+            <input
+              type="password"
+              id="loxone-auth-password"
+              placeholder="Wird in die URL eingefügt"
+              autocomplete="off"
+            />
+          </div>
+          <div>
+            <p class="form-note">
+              Hinweis: Das Passwort wird nur beim Erzeugen der Befehls-URLs genutzt und nicht
+              gespeichert. In Loxone erscheint die komplette URL inklusive Zugangsdaten im Klartext.
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <section class="card">
         <h2>Licht steuern</h2>
         <div class="grid two">
           <div>
@@ -1144,10 +1203,14 @@ header('Content-Type: text/html; charset=utf-8');
       const lightCommandHelper = document.getElementById('light-command-helper');
       const sceneCommandHelper = document.getElementById('scene-command-helper');
       const sceneActionSelect = document.getElementById('scene-action');
+      const commandBaseSelect = document.getElementById('command-base-path');
+      const authUserInput = document.getElementById('loxone-auth-user');
+      const authPasswordInput = document.getElementById('loxone-auth-password');
 
       const state = {
         bridges: [],
         activeBridgeId: null,
+        commandTarget: 'public',
       };
 
       const LIGHT_HELPER_DEFAULT =
@@ -1201,11 +1264,43 @@ header('Content-Type: text/html; charset=utf-8');
 
       const internalBase = new URL('index.php', window.location.href);
       const publicBasePath = document.body.dataset.apiBase || internalBase.pathname;
+      const adminBasePath = document.body.dataset.adminBase || '';
       const publicBase = new URL(publicBasePath, window.location.origin);
+      const adminBase = adminBasePath ? new URL(adminBasePath, window.location.origin) : null;
+
+      const getCommandTarget = () => (state.commandTarget === 'admin' && adminBase ? 'admin' : 'public');
+
+      const getCommandAuth = () => {
+        const username = authUserInput ? authUserInput.value.trim() : '';
+        const password = authPasswordInput ? authPasswordInput.value : '';
+        if (!username && !password) {
+          return null;
+        }
+        return {
+          username,
+          password,
+        };
+      };
 
       const buildUrl = (action, params = {}, options = {}) => {
-        const target = options.target === 'public' ? publicBase : internalBase;
-        const url = new URL(target.toString());
+        let base;
+        if (options.target === 'admin' && adminBase) {
+          base = adminBase;
+        } else if (options.target === 'public') {
+          base = publicBase;
+        } else {
+          base = internalBase;
+        }
+        const url = new URL(base.toString());
+        if (options.auth) {
+          const { username, password } = options.auth;
+          if (username) {
+            url.username = username;
+          }
+          if (password) {
+            url.password = password;
+          }
+        }
         url.searchParams.set('ajax', '1');
         url.searchParams.set('action', action);
         Object.entries(params).forEach(([key, value]) => {
@@ -1239,9 +1334,10 @@ header('Content-Type: text/html; charset=utf-8');
           onParams.brightness = brightnessValue;
         }
         const offParams = { ...baseParams, on: '0' };
+        const commandOptions = { target: getCommandTarget(), auth: getCommandAuth() };
         renderHelperRows(lightCommandHelper, 'URLs für den virtuellen Ausgang (GET-Befehl in Loxone):', [
-          { label: 'Virtueller Ausgang – EIN (Wert 1):', url: buildUrl('light_command', onParams, { target: 'public' }) },
-          { label: 'Virtueller Ausgang – AUS (Wert 0):', url: buildUrl('light_command', offParams, { target: 'public' }) },
+          { label: 'Virtueller Ausgang – EIN (Wert 1):', url: buildUrl('light_command', onParams, commandOptions) },
+          { label: 'Virtueller Ausgang – AUS (Wert 0):', url: buildUrl('light_command', offParams, commandOptions) },
         ]);
       };
 
@@ -1283,9 +1379,10 @@ header('Content-Type: text/html; charset=utf-8');
         }
         const onParams = { ...baseParams, state: '1' };
         const offParams = { ...baseParams, state: '0' };
+        const commandOptions = { target: getCommandTarget(), auth: getCommandAuth() };
         renderHelperRows(sceneCommandHelper, 'Nutze diese URLs im virtuellen Ausgang von Loxone:', [
-          { label: 'Virtueller Ausgang – EIN (Wert 1):', url: buildUrl('scene_command', onParams, { target: 'public' }) },
-          { label: 'Virtueller Ausgang – AUS (Wert 0):', url: buildUrl('scene_command', offParams, { target: 'public' }) },
+          { label: 'Virtueller Ausgang – EIN (Wert 1):', url: buildUrl('scene_command', onParams, commandOptions) },
+          { label: 'Virtueller Ausgang – AUS (Wert 0):', url: buildUrl('scene_command', offParams, commandOptions) },
         ]);
       };
 
@@ -1296,6 +1393,25 @@ header('Content-Type: text/html; charset=utf-8');
 
       ensureHelperMessage(lightCommandHelper, LIGHT_HELPER_DEFAULT);
       ensureHelperMessage(sceneCommandHelper, SCENE_HELPER_DEFAULT);
+
+      if (commandBaseSelect) {
+        commandBaseSelect.addEventListener('change', () => {
+          state.commandTarget = commandBaseSelect.value === 'admin' ? 'admin' : 'public';
+          updateCommandHelpers();
+        });
+      }
+
+      const handleAuthChange = () => {
+        updateCommandHelpers();
+      };
+
+      if (authUserInput) {
+        authUserInput.addEventListener('input', handleAuthChange);
+      }
+
+      if (authPasswordInput) {
+        authPasswordInput.addEventListener('input', handleAuthChange);
+      }
 
       const apiFetch = async (action, { method = 'GET', body, params = {} } = {}) => {
         const options = {

@@ -130,27 +130,33 @@ Python-Umfeld angelegt und das Plugin darin installiert wird.
 Innerhalb von Loxone kann dieser Dienst über einfache HTTP-Kommandos angesteuert werden.
 Die Weboberfläche zeigt dir alle relevanten IDs inklusive Raum- und Szenenbezug an und
 erzeugt für jede Bridge direkt kopierbare URLs für virtuelle Ausgänge – sowohl für das
-Einschalten (Wert `1`) als auch zum Ausschalten (Wert `0`). So kannst du mehrere Hue Bridges
-parallel betreiben und deren Ressourcen sauber getrennt ansteuern.
+Einschalten (Wert `1`) als auch zum Ausschalten (Wert `0`). Du kannst zusätzlich auswählen,
+ob die Befehle über den öffentlichen `/plugins/...`-Pfad (ohne Login) oder den geschützten
+`/admin/plugins/...`-Pfad laufen sollen. Optional lassen sich HTTP-Benutzername und Passwort
+für Basic Auth hinterlegen, die nur in den generierten URLs erscheinen.
 
 ### Vorgehen in Loxone (Virtueller Ausgang)
 
 1. Lege im Miniserver einen **virtuellen Ausgang** an, der auf das LoxBerry-System zeigt
    (IP-Adresse = LoxBerry, Port = `80`).
-2. Erstelle unter diesem Ausgang einen **virtuellen Ausgangsbefehl**. Als Kommando trägst
-   du die entsprechende URL (siehe Beispiele unten) ein. Verwende `GET` und aktiviere die
-   Optionen „Befehl bei EIN ausführen“ und „Befehl bei AUS ausführen“, falls du beide Fälle
-   bedienen möchtest.
-3. Kopiere die `light_id` bzw. `scene_id` direkt aus der Plugin-Oberfläche. Die Seite zeigt
+2. Entscheide im Abschnitt „Loxone-Ausgänge vorbereiten“ der Plugin-Oberfläche, ob du die
+   öffentliche URL oder den geschützten Admin-Pfad verwenden möchtest. Falls dein LoxBerry
+   einen Login verlangt, kannst du dort auch Benutzername und Passwort angeben – sie werden
+   lediglich in die erzeugten URLs eingetragen.
+3. Erstelle unter dem virtuellen Ausgang in Loxone einen **virtuellen Ausgangsbefehl** und
+   trage als Kommando die URL aus dem Plugin ein. Verwende `GET` und aktiviere die Optionen
+   „Befehl bei EIN ausführen“ und „Befehl bei AUS ausführen“, falls du beide Fälle bedienen
+   möchtest.
+4. Kopiere die `light_id` bzw. `scene_id` direkt aus der Plugin-Oberfläche. Die Seite zeigt
    unter „Licht steuern“ und „Szene aktivieren“ automatisch die passenden URLs für EIN (`1`)
    und AUS (`0`) an.
-4. Wiederhole die Schritte für weitere Lampen oder Szenen. Durch die Bridge-Auswahl kannst du
+5. Wiederhole die Schritte für weitere Lampen oder Szenen. Durch die Bridge-Auswahl kannst du
    unterschiedliche Hue Bridges getrennt verwalten.
 
 ### Szenen oder Lampen per HTTP-Request auslösen
 
-Für einfache Integrationen (z. B. über einen virtuellen Ausgang) nutzt du den öffentlich
-erreichbaren Pfad unter `/plugins/<plugin-ordner>/index.php`. So vermeidest du zusätzliche
+Für einfache Integrationen (z. B. über einen virtuellen Ausgang) kannst du den öffentlich
+erreichbaren Pfad unter `/plugins/<plugin-ordner>/index.php` nutzen. So vermeidest du zusätzliche
 HTTP-Authentifizierung auf `/admin/plugins/...`. Beispiel zum Aktivieren bzw. Ausschalten einer
 Szene (Wert `1` aktiviert, Wert `0` schaltet den Zielbereich aus):
 
@@ -167,6 +173,14 @@ http://<loxberry-host>/plugins/hueapiv2/index.php?ajax=1&action=scene_command&br
 ```
 
 Das Plugin antwortet mit einer JSON-Struktur; ein erfolgreicher Aufruf liefert `{"ok": true}`.
+Wenn du stattdessen den Admin-Pfad einsetzt und dieser durch Basic Auth geschützt ist,
+integriert die Oberfläche auf Wunsch Benutzername und Passwort automatisch in die URL, z. B.:
+
+```
+http://loxberry:geheimespasswort@<loxberry-host>/admin/plugins/hueapiv2/index.php?ajax=1&action=scene_command&bridge_id=<bridge-id>&scene_id=<scene-rid>&state=1
+```
+
+Beachte, dass Loxone die vollständige URL (inklusive Zugangsdaten) im Klartext speichert.
 
 Zum Schalten einer Lampe steht derselbe Mechanismus bereit:
 
