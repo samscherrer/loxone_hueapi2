@@ -12,6 +12,10 @@ einen kleinen REST-Server lassen sich Lampen, Szenen und Räume abfragen sowie A
 * Verwaltung mehrerer Hue Bridges samt Application-/Client-Key direkt in der Weboberfläche.
 * Kontextbezogene Anzeige: Szenen zeigen den verknüpften Raum, Lampen listen beteiligte Räume
   und Szenen auf.
+* Ressourcenliste inklusive Lampen, Szenen, Räumen, Schaltern und Bewegungsmeldern – ideal, um
+  die benötigten Hue-RIDs für Loxone zu kopieren.
+* Speichern des bevorzugten Loxone-Pfads (öffentlich/Admin) sowie optionaler Zugangsdaten für
+  virtuelle Ausgänge direkt in der Oberfläche.
 * Konfigurationsdatei und Umgebungsvariable zur einfachen Anpassung auf dem LoxBerry.
 
 ## Vorbereitung
@@ -78,13 +82,21 @@ grafische Oberfläche ausliefert. Dort kannst du
 
 * Hue Bridges samt Application-Key anlegen, bearbeiten und zwischen ihnen wechseln,
 * die Verbindung zum lokalen REST-Dienst testen,
-* Lampen, Räume und Szenen direkt auslesen,
+* Lampen, Räume, Szenen sowie Schalter und Bewegungsmelder direkt auslesen,
 * sowie einzelne Lampen oder Szenen zum Testen schalten.
+* Pfad und optionale Zugangsdaten für Loxone-Ausgänge speichern, um fertige HTTP-Kommandos
+  schneller zu übernehmen.
 
 Die Oberfläche lädt die Bridge-Liste automatisch und kommuniziert über einen
 PHP-Proxy mit dem lokalen REST-Dienst. Damit entfällt die manuelle Eingabe einer
 Basis-URL. Anpassungen an Host oder Port erfolgen ausschließlich über die oben
 genannten Umgebungsvariablen.
+
+Der Bereich **„Hue-Ressourcen anzeigen“** stellt separate Buttons für Lampen,
+Szenen, Räume, Schalter und Bewegungsmelder bereit. So kannst du die jeweiligen
+Resource-IDs (RID) schnell ablesen oder dir per „JSON anzeigen“ die vollständigen
+Hue-Daten anzeigen lassen – ideal, um Schalter oder Bewegungsmelder mit virtuellen
+Eingängen in Loxone zu verknüpfen.
 
 ### TLS-Zertifikate der Hue Bridge
 
@@ -145,7 +157,8 @@ außerdem die komplette Basis-URL inklusive Zugangsdaten an (z. B.
 2. Entscheide im Abschnitt „Loxone-Ausgänge vorbereiten“ der Plugin-Oberfläche, ob du die
    öffentliche URL oder den geschützten Admin-Pfad verwenden möchtest. Falls dein LoxBerry
    einen Login verlangt, kannst du dort auch Benutzername und Passwort angeben – sie werden
-   lediglich in die erzeugten URLs eingetragen.
+   lediglich in die erzeugten URLs eingetragen. Speichere die Eingaben anschließend mit
+   „Einstellungen speichern“ im Abschnitt darunter.
 3. Erstelle unter dem virtuellen Ausgang in Loxone einen **virtuellen Ausgangsbefehl** und
    trage als Kommando die URL aus dem Plugin ein. Verwende die Methode **POST** und aktiviere
    die Optionen „Befehl bei EIN ausführen“ und „Befehl bei AUS ausführen“, falls du beide

@@ -257,6 +257,9 @@ function default_loxone_settings(): array
         'base_url' => null,
         'command_method' => 'POST',
         'event_method' => 'POST',
+        'command_scope' => 'public',
+        'command_auth_user' => null,
+        'command_auth_password' => null,
     ];
 }
 
@@ -286,10 +289,30 @@ function normalise_loxone_settings($value): array
         $eventMethod = $commandMethod;
     }
 
+    $commandScope = isset($value['command_scope']) && is_string($value['command_scope'])
+        ? strtolower(trim($value['command_scope']))
+        : 'public';
+    if (!in_array($commandScope, ['public', 'admin'], true)) {
+        $commandScope = 'public';
+    }
+
+    $authUser = isset($value['command_auth_user']) && is_string($value['command_auth_user'])
+        ? trim($value['command_auth_user'])
+        : '';
+    $authUser = $authUser !== '' ? $authUser : null;
+
+    $authPassword = isset($value['command_auth_password']) && is_string($value['command_auth_password'])
+        ? $value['command_auth_password']
+        : '';
+    $authPassword = $authPassword !== '' ? $authPassword : null;
+
     return [
         'base_url' => $baseUrl,
         'command_method' => $commandMethod,
         'event_method' => $eventMethod,
+        'command_scope' => $commandScope,
+        'command_auth_user' => $authUser,
+        'command_auth_password' => $authPassword,
     ];
 }
 
@@ -798,7 +821,7 @@ function handle_ajax(string $configPath): void
                 if ($bridgeId === '') {
                     throw new RuntimeException('Es wurde keine Bridge ausgewählt.');
                 }
-                if (!in_array($type, ['lights', 'scenes', 'rooms'], true)) {
+                if (!in_array($type, ['lights', 'scenes', 'rooms', 'buttons', 'motions'], true)) {
                     throw new RuntimeException('Unbekannter Ressourcentyp.');
                 }
                 $result = call_hue_cli(['list-resources', '--type', $type, '--bridge-id', $bridgeId]);
@@ -1305,8 +1328,8 @@ header('Content-Type: text/html; charset=utf-8');
       <section class="card">
         <h2>Hue-Ressourcen anzeigen</h2>
         <p class="muted">
-          Nach erfolgreicher Verbindung kannst du Lampen, Szenen oder Räume aus
-          der ausgewählten Bridge laden.
+          Nach erfolgreicher Verbindung kannst du Lampen, Szenen, Räume, Schalter
+          oder Bewegungsmelder aus der ausgewählten Bridge laden.
         </p>
         <div class="actions">
           <button type="button" class="secondary load-resource" data-type="lights">
@@ -1317,6 +1340,12 @@ header('Content-Type: text/html; charset=utf-8');
           </button>
           <button type="button" class="secondary load-resource" data-type="rooms">
             Räume laden
+          </button>
+          <button type="button" class="secondary load-resource" data-type="buttons">
+            Schalter laden
+          </button>
+          <button type="button" class="secondary load-resource" data-type="motions">
+            Bewegungsmelder laden
           </button>
         </div>
         <div id="resource-message" class="message"></div>
@@ -1347,12 +1376,13 @@ header('Content-Type: text/html; charset=utf-8');
           für die erzeugten URLs verwendet. Trage im virtuellen Ausgang von Loxone im Hauptelement
           die vollständige Basis-URL inklusive Benutzername und Passwort ein (z.&nbsp;B.
           <code>http://loxberry:deinpasswort@loxberry</code>) und stelle die HTTP-Methode in Loxone
-          auf <strong>POST</strong>.
+          auf <strong>POST</strong>. Speichere deine Auswahl anschließend mit „Einstellungen speichern“
+          im Abschnitt „Loxone-Miniserver“.
         </p>
         <div class="grid two">
           <div>
             <label for="command-base-path">Basis-URL</label>
-            <select id="command-base-path">
+            <select id="command-base-path" form="loxone-settings-form">
               <option value="public" selected>
                 Öffentlich (ohne Login) – <?= htmlspecialchars($publicBasePath, ENT_QUOTES, 'UTF-8'); ?>
               </option>
@@ -1368,6 +1398,7 @@ header('Content-Type: text/html; charset=utf-8');
               id="loxone-auth-user"
               placeholder="z. B. loxberry"
               autocomplete="off"
+              form="loxone-settings-form"
             />
           </div>
         </div>
@@ -1379,6 +1410,7 @@ header('Content-Type: text/html; charset=utf-8');
               id="loxone-auth-password"
               placeholder="Wird in die URL eingefügt"
               autocomplete="off"
+              form="loxone-settings-form"
             />
           </div>
           <div>
@@ -1649,6 +1681,8 @@ header('Content-Type: text/html; charset=utf-8');
         bridges: [],
         activeBridgeId: null,
         commandTarget: 'public',
+        commandAuthUser: '',
+        commandAuthPassword: '',
         commandMethod: 'POST',
         eventMethod: 'POST',
         loxoneBaseUrl: '',
@@ -1714,8 +1748,8 @@ header('Content-Type: text/html; charset=utf-8');
       const getCommandTarget = () => (state.commandTarget === 'admin' && adminBase ? 'admin' : 'public');
 
       const getCommandAuth = () => {
-        const username = authUserInput ? authUserInput.value.trim() : '';
-        const password = authPasswordInput ? authPasswordInput.value : '';
+        const username = (state.commandAuthUser || '').trim();
+        const password = state.commandAuthPassword ?? '';
         if (!username && !password) {
           return null;
         }
@@ -1763,6 +1797,15 @@ header('Content-Type: text/html; charset=utf-8');
         }
         if (loxoneEventMethodSelect) {
           loxoneEventMethodSelect.value = state.eventMethod || state.commandMethod || 'POST';
+        }
+        if (commandBaseSelect) {
+          commandBaseSelect.value = state.commandTarget === 'admin' ? 'admin' : 'public';
+        }
+        if (authUserInput) {
+          authUserInput.value = state.commandAuthUser || '';
+        }
+        if (authPasswordInput) {
+          authPasswordInput.value = state.commandAuthPassword || '';
         }
       };
 
@@ -2057,6 +2100,8 @@ header('Content-Type: text/html; charset=utf-8');
       }
 
       const handleAuthChange = () => {
+        state.commandAuthUser = authUserInput ? authUserInput.value.trim() : '';
+        state.commandAuthPassword = authPasswordInput ? authPasswordInput.value : '';
         updateCommandHelpers();
       };
 
@@ -2240,6 +2285,9 @@ header('Content-Type: text/html; charset=utf-8');
           state.loxoneBaseUrl = loxone.base_url || '';
           state.commandMethod = loxone.command_method || 'POST';
           state.eventMethod = loxone.event_method || state.commandMethod || 'POST';
+          state.commandTarget = loxone.command_scope === 'admin' ? 'admin' : 'public';
+          state.commandAuthUser = loxone.command_auth_user || '';
+          state.commandAuthPassword = loxone.command_auth_password || '';
           state.virtualInputs = Array.isArray(data.virtual_inputs) ? data.virtual_inputs : [];
           renderLoxoneSettings();
           renderVirtualInputList();
@@ -2307,6 +2355,9 @@ header('Content-Type: text/html; charset=utf-8');
             base_url: loxoneBaseInput ? loxoneBaseInput.value.trim() : '',
             command_method: loxoneCommandMethodSelect ? loxoneCommandMethodSelect.value : 'POST',
             event_method: loxoneEventMethodSelect ? loxoneEventMethodSelect.value : state.eventMethod || 'POST',
+            command_scope: getCommandTarget(),
+            command_auth_user: state.commandAuthUser || '',
+            command_auth_password: state.commandAuthPassword || '',
           };
           try {
             const data = await apiFetch('save_loxone_settings', { method: 'POST', body: payload });
@@ -2314,6 +2365,9 @@ header('Content-Type: text/html; charset=utf-8');
             state.loxoneBaseUrl = loxone.base_url || '';
             state.commandMethod = loxone.command_method || 'POST';
             state.eventMethod = loxone.event_method || state.commandMethod || 'POST';
+            state.commandTarget = loxone.command_scope === 'admin' ? 'admin' : 'public';
+            state.commandAuthUser = loxone.command_auth_user || '';
+            state.commandAuthPassword = loxone.command_auth_password || '';
             renderLoxoneSettings();
             message(loxoneSettingsMessage, 'success', 'Einstellungen gespeichert.');
             updateCommandHelpers();
@@ -2549,6 +2603,19 @@ header('Content-Type: text/html; charset=utf-8');
             const scenesSummary = summariseNames(item.scenes);
             if (scenesSummary) {
               appendDetailLine(nameCell, `Szenen: ${scenesSummary}`);
+            }
+
+            if (item.device && typeof item.device === 'object') {
+              const rawName = typeof item.device.name === 'string' ? item.device.name.trim() : '';
+              const fallback = typeof item.device.id === 'string' ? item.device.id.trim() : '';
+              const deviceLabel = rawName || fallback;
+              if (deviceLabel) {
+                appendDetailLine(nameCell, `Gerät: ${deviceLabel}`);
+              }
+            }
+
+            if (typeof item.state === 'boolean') {
+              appendDetailLine(nameCell, `Bewegung: ${item.state ? 'aktiv' : 'inaktiv'}`);
             }
 
             const idCell = document.createElement('td');

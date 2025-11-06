@@ -39,6 +39,9 @@ def test_load_config_success(tmp_path: Path) -> None:
                 "base_url": "http://loxone:pass@192.168.1.10",
                 "command_method": "POST",
                 "event_method": "GET",
+                "command_scope": "admin",
+                "command_auth_user": "loxberry",
+                "command_auth_password": "secret",
             },
             "virtual_inputs": [
                 {
@@ -74,6 +77,9 @@ def test_load_config_success(tmp_path: Path) -> None:
     assert config.loxone.base_url == "http://loxone:pass@192.168.1.10"
     assert config.loxone.command_method == "POST"
     assert config.loxone.event_method == "GET"
+    assert config.loxone.command_scope == "admin"
+    assert config.loxone.command_auth_user == "loxberry"
+    assert config.loxone.command_auth_password == "secret"
     assert len(config.virtual_inputs) == 1
     entry = config.virtual_inputs[0]
     assert entry.id == "wohnzimmer-switch"
@@ -158,6 +164,9 @@ def test_save_config_roundtrip(tmp_path: Path) -> None:
             base_url="http://loxone:pass@192.168.1.11",
             command_method="POST",
             event_method="GET",
+            command_scope="admin",
+            command_auth_user="loxberry",
+            command_auth_password="secret",
         ),
         virtual_inputs=[
             VirtualInputConfig(
@@ -182,6 +191,9 @@ def test_save_config_roundtrip(tmp_path: Path) -> None:
     assert loaded.default_bridge.name == "Test"
     assert loaded.loxone.base_url == "http://loxone:pass@192.168.1.11"
     assert loaded.loxone.event_method == "GET"
+    assert loaded.loxone.command_scope == "admin"
+    assert loaded.loxone.command_auth_user == "loxberry"
+    assert loaded.loxone.command_auth_password == "secret"
     assert len(loaded.virtual_inputs) == 1
     assert loaded.virtual_inputs[0].virtual_input == "VirtInput"
 

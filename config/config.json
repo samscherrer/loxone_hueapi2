@@ -13,7 +13,10 @@
   "loxone": {
     "base_url": "http://loxone:pass@192.168.1.50",
     "command_method": "POST",
-    "event_method": "POST"
+    "event_method": "POST",
+    "command_scope": "public",
+    "command_auth_user": null,
+    "command_auth_password": null
   },
   "virtual_inputs": []
 }

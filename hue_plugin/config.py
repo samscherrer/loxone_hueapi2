@@ -53,14 +53,22 @@ class LoxoneSettings:
     base_url: Optional[str] = None
     command_method: str = "POST"
     event_method: str = "POST"
+    command_scope: str = "public"
+    command_auth_user: Optional[str] = None
+    command_auth_password: Optional[str] = None
 
     def to_dict(self) -> Dict[str, Any]:
         payload: Dict[str, Any] = {
             "command_method": self.command_method,
             "event_method": self.event_method,
+            "command_scope": self.command_scope,
         }
         if self.base_url:
             payload["base_url"] = self.base_url
+        if self.command_auth_user:
+            payload["command_auth_user"] = self.command_auth_user
+        if self.command_auth_password:
+            payload["command_auth_password"] = self.command_auth_password
         return payload
 
 
@@ -277,10 +285,33 @@ def _parse_loxone_settings(payload: Any) -> LoxoneSettings:
 
     command_method = _normalize_method(payload.get("command_method"), "POST")
     event_method = _normalize_method(payload.get("event_method"), command_method)
+    scope_value = payload.get("command_scope")
+    if isinstance(scope_value, str):
+        scope_value = scope_value.strip().lower()
+    else:
+        scope_value = "public"
+    if scope_value not in {"public", "admin"}:
+        scope_value = "public"
+
+    auth_user = payload.get("command_auth_user")
+    if isinstance(auth_user, str):
+        auth_user = auth_user.strip() or None
+    else:
+        auth_user = None
+
+    auth_password = payload.get("command_auth_password")
+    if isinstance(auth_password, str):
+        auth_password = auth_password if auth_password != "" else None
+    else:
+        auth_password = None
+
     return LoxoneSettings(
         base_url=base_url,
         command_method=command_method,
         event_method=event_method,
+        command_scope=scope_value,
+        command_auth_user=auth_user,
+        command_auth_password=auth_password,
     )
 
 
