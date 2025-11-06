@@ -1,0 +1,22 @@
+{
+  "bridges": [
+    {
+      "id": "default",
+      "name": "Mein Zuhause",
+      "bridge_ip": "192.168.1.2",
+      "application_key": "your-hue-application-key",
+      "client_key": null,
+      "use_https": true,
+      "verify_tls": false
+    }
+  ],
+  "loxone": {
+    "base_url": "http://loxone:pass@192.168.1.50",
+    "command_method": "POST",
+    "event_method": "POST",
+    "command_scope": "public",
+    "command_auth_user": null,
+    "command_auth_password": null
+  },
+  "virtual_inputs": []
+}
