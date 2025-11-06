@@ -603,6 +603,108 @@ function plugin_root(): string
     return $resolved;
 }
 
+function plugin_var_dir(): string
+{
+    return plugin_root() . '/var';
+}
+
+function event_forwarder_pid_file(): string
+{
+    return plugin_var_dir() . '/event_forwarder.pid';
+}
+
+function event_forwarder_log_file(): string
+{
+    return plugin_var_dir() . '/event_forwarder.log';
+}
+
+function ensure_directory(string $path): void
+{
+    if (is_dir($path)) {
+        return;
+    }
+
+    if (!@mkdir($path, 0775, true) && !is_dir($path)) {
+        throw new RuntimeException('Verzeichnis konnte nicht erstellt werden: ' . $path);
+    }
+}
+
+function process_is_running(int $pid): bool
+{
+    if ($pid <= 0) {
+        return false;
+    }
+
+    if (function_exists('posix_kill')) {
+        return @posix_kill($pid, 0);
+    }
+
+    $exitCode = 1;
+    @exec('kill -0 ' . $pid . ' >/dev/null 2>&1', $unusedOutput, $exitCode);
+    return $exitCode === 0;
+}
+
+function start_event_forwarder(): void
+{
+    $pidFile = event_forwarder_pid_file();
+    $varDir = plugin_var_dir();
+
+    ensure_directory($varDir);
+
+    $lockFile = $pidFile . '.lock';
+    $lockHandle = @fopen($lockFile, 'c');
+    if ($lockHandle === false) {
+        return;
+    }
+
+    if (!@flock($lockHandle, LOCK_EX)) {
+        fclose($lockHandle);
+        return;
+    }
+
+    if (is_file($pidFile)) {
+        $existingPid = (int) trim((string) @file_get_contents($pidFile));
+        if ($existingPid > 0 && process_is_running($existingPid)) {
+            flock($lockHandle, LOCK_UN);
+            fclose($lockHandle);
+            return;
+        }
+        @unlink($pidFile);
+    }
+
+    $python = python_binary();
+    $configPath = plugin_config_path();
+    $existingPythonPath = getenv('PYTHONPATH');
+    $segments = [plugin_root()];
+    if ($existingPythonPath !== false && $existingPythonPath !== '') {
+        $segments[] = $existingPythonPath;
+    }
+    $envParts = [
+        'HUE_PLUGIN_CONFIG=' . escapeshellarg($configPath),
+        'PYTHONPATH=' . escapeshellarg(implode(PATH_SEPARATOR, $segments)),
+    ];
+
+    $logFile = event_forwarder_log_file();
+    ensure_directory(dirname($logFile));
+
+    $command = sprintf(
+        'cd %s && %s %s -m hue_plugin.event_forwarder >> %s 2>&1 & echo $!',
+        escapeshellarg(plugin_root()),
+        implode(' ', $envParts),
+        escapeshellcmd($python),
+        escapeshellarg($logFile)
+    );
+
+    $pidOutput = @shell_exec($command);
+    $pid = $pidOutput !== null ? (int) trim($pidOutput) : 0;
+    if ($pid > 0) {
+        file_put_contents($pidFile, (string) $pid);
+    }
+
+    flock($lockHandle, LOCK_UN);
+    fclose($lockHandle);
+}
+
 function python_binary(): string
 {
     $root = plugin_root();
@@ -636,6 +738,12 @@ function call_hue_cli(array $args): array
         $pythonPathSegments[] = $existingPythonPath;
     }
     putenv('PYTHONPATH=' . implode(PATH_SEPARATOR, $pythonPathSegments));
+
+    try {
+        start_event_forwarder();
+    } catch (Throwable $forwarderError) {
+        // Best effort: Das Starten des Forwarders darf die eigentliche Aktion nicht verhindern.
+    }
 
     $process = proc_open($command, $descriptors, $pipes, plugin_root());
     if (!is_resource($process)) {
