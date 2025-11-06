@@ -232,6 +232,8 @@ class BridgeWorker(threading.Thread):
         self._lock = threading.Lock()
         self._lookup: Dict[Tuple[str, str], Tuple[VirtualInputConfig, ...]] = {}
         self._state_store = state_store
+        self._state_lock = threading.Lock()
+        self._last_motion_states: Dict[str, Optional[bool]] = {}
 
     @property
     def bridge_id(self) -> str:
@@ -256,6 +258,11 @@ class BridgeWorker(threading.Thread):
                 key = (mapping.resource_id, mapping.resource_type)
                 grouped[key].append(mapping)
             self._lookup = {key: tuple(items) for key, items in grouped.items()}
+        with self._state_lock:
+            active_motion_ids = {resource_id for (resource_id, rtype) in self._lookup if rtype == "motion"}
+            stale_ids = [rid for rid in self._last_motion_states if rid not in active_motion_ids]
+            for rid in stale_ids:
+                del self._last_motion_states[rid]
 
     def stop(self) -> None:
         self._stop_event.set()
@@ -266,6 +273,12 @@ class BridgeWorker(threading.Thread):
 
     def run(self) -> None:  # pragma: no cover - long running thread
         backoff = 5.0
+        poll_thread = threading.Thread(
+            target=self._poll_loop,
+            name=f"hue-forwarder-poll-{self._bridge_config.id}",
+            daemon=True,
+        )
+        poll_thread.start()
         while not self._stop_event.is_set() and not self._global_stop.is_set():
             if not self._active():
                 if self._stop_event.wait(timeout=5.0) or self._global_stop.is_set():
@@ -281,6 +294,7 @@ class BridgeWorker(threading.Thread):
             try:
                 for payload in self._client.iter_events():
                     if self._stop_event.is_set() or self._global_stop.is_set():
+                        poll_thread.join(timeout=5.0)
                         return
                     self._handle_payload(payload, sender)
             except HueBridgeError as exc:
@@ -292,6 +306,7 @@ class BridgeWorker(threading.Thread):
                 backoff = min(backoff * 2, 60.0)
             else:
                 backoff = 5.0
+        poll_thread.join(timeout=5.0)
 
     def _handle_payload(self, payload: Dict[str, object], sender: LoxoneSender) -> None:
         data = payload.get("data")
@@ -331,6 +346,10 @@ class BridgeWorker(threading.Thread):
             self._handle_button_event(entry, mapping, sender)
         elif rtype == "motion":
             self._handle_motion_event(entry, mapping, sender)
+
+    def _update_motion_state(self, resource_id: str, state: Optional[bool]) -> None:
+        with self._state_lock:
+            self._last_motion_states[resource_id] = state
 
     def _record_event(
         self,
@@ -399,6 +418,7 @@ class BridgeWorker(threading.Thread):
         state = extract_motion_state(entry)
         if state is True:
             sender.send(mapping.virtual_input, mapping.active_value)
+            self._update_motion_state(mapping.resource_id, True)
             self._record_event(
                 mapping,
                 "active",
@@ -412,6 +432,7 @@ class BridgeWorker(threading.Thread):
             if value is not None:
                 sender.send(mapping.virtual_input, value)
                 delivered = True
+            self._update_motion_state(mapping.resource_id, False)
             self._record_event(
                 mapping,
                 "inactive",
@@ -436,6 +457,81 @@ class BridgeWorker(threading.Thread):
             _log(
                 f"Reset-Weiterleitung für Bridge '{self._bridge_config.id}' fehlgeschlagen: {exc}"
             )
+
+    def _poll_loop(self) -> None:
+        while not self._stop_event.is_set() and not self._global_stop.is_set():
+            if not self._active():
+                if self._stop_event.wait(timeout=5.0) or self._global_stop.is_set():
+                    break
+                continue
+
+            sender = self._sender_provider()
+            if not sender.available:
+                if self._stop_event.wait(timeout=5.0) or self._global_stop.is_set():
+                    break
+                continue
+
+            self._poll_motion_states(sender)
+
+            for _ in range(10):
+                if self._stop_event.wait(timeout=1.0) or self._global_stop.is_set():
+                    return
+
+    def _poll_motion_states(self, sender: LoxoneSender) -> None:
+        try:
+            resources = list(self._client.get_motion_sensors())
+        except HueBridgeError as exc:
+            _log(
+                f"Bewegungsmelder konnten nicht abgefragt werden (Bridge '{self._bridge_config.id}'): {exc}"
+            )
+            return
+
+        with self._lock:
+            lookup = self._lookup
+
+        for resource in resources:
+            key = (resource.id, "motion")
+            mappings = lookup.get(key)
+            if not mappings:
+                continue
+
+            state = extract_motion_state(resource.data)
+            if state is None:
+                continue
+
+            with self._state_lock:
+                previous = self._last_motion_states.get(resource.id)
+                self._last_motion_states[resource.id] = state
+
+            if previous is None and state is False:
+                continue
+            if previous is not None and previous is state:
+                continue
+
+            for mapping in mappings:
+                if state is True:
+                    sender.send(mapping.virtual_input, mapping.active_value)
+                    self._record_event(
+                        mapping,
+                        "active",
+                        mapping.active_value,
+                        event_type="motion",
+                        extra={"motion_state": True},
+                    )
+                else:
+                    delivered = False
+                    value = mapping.inactive_value
+                    if value is not None:
+                        sender.send(mapping.virtual_input, value)
+                        delivered = True
+                    self._record_event(
+                        mapping,
+                        "inactive",
+                        value,
+                        event_type="motion",
+                        delivered=delivered,
+                        extra={"motion_state": False},
+                    )
 
 
 class HueEventForwarder:

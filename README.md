@@ -240,10 +240,12 @@ Impuls erhält.
 
 Sobald ein Eintrag gespeichert ist, lauscht das Plugin auf den Hue-Eventstream und sendet die
 konfigurierten Werte automatisch an den angegebenen Miniserver (über die zuvor hinterlegte
-Basis-URL). Der benötigte Hintergrunddienst wird beim Aufruf der Weboberfläche automatisch
-gestartet; du musst keinen zusätzlichen Systemdienst konfigurieren. Das Forwarder-Log findest du –
-falls du es zur Fehlersuche benötigst – im Plugin-Verzeichnis unter `var/event_forwarder.log`
-(z. B. `/opt/loxberry/data/plugins/hueapiv2/var/event_forwarder.log`).
+Basis-URL). Falls der Eventstream ausnahmsweise keine Daten liefert, fragt der Forwarder die
+Bewegungsmelder in kurzen Abständen per REST ab und erkennt so dennoch Statuswechsel. Der
+benötigte Hintergrunddienst wird beim Aufruf der Weboberfläche automatisch gestartet; du musst
+keinen zusätzlichen Systemdienst konfigurieren. Das Forwarder-Log findest du – falls du es zur
+Fehlersuche benötigst – im Plugin-Verzeichnis unter `var/event_forwarder.log` (z. B.
+`/opt/loxberry/data/plugins/hueapiv2/var/event_forwarder.log`).
 
 Über die Schaltflächen **„Test aktiv“**, **„Test inaktiv“** und – falls vorhanden – **„Test Reset“** im
 Abschnitt „Hue → Loxone Eingänge“ kannst du jederzeit manuell einen Impuls an den virtuellen

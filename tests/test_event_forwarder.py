@@ -3,15 +3,19 @@ import pytest
 from hue_plugin.config import LoxoneSettings
 import json
 
+import threading
+
 import pytest
 
-from hue_plugin.config import LoxoneSettings, VirtualInputConfig
+from hue_plugin.config import HueBridgeConfig, LoxoneSettings, VirtualInputConfig
 from hue_plugin.event_forwarder import (
     EventStateStore,
     LoxoneSender,
     extract_motion_state,
     load_event_state,
 )
+from hue_plugin.event_forwarder import BridgeWorker
+from hue_plugin.hue_client import HueResource
 
 
 def test_sender_requires_base_url():
@@ -119,3 +123,79 @@ def test_event_state_store_records_and_trims(tmp_path):
 def test_load_event_state_handles_missing(tmp_path):
     missing = tmp_path / "does-not-exist.json"
     assert load_event_state(missing) == {"events": [], "states": {}}
+
+
+def test_motion_poll_triggers_events(tmp_path):
+    config = HueBridgeConfig(
+        id="bridge-1",
+        bridge_ip="192.0.2.1",
+        application_key="abc",
+    )
+    store = EventStateStore(tmp_path / "state.json")
+
+    events: list[tuple[str, str]] = []
+
+    class DummySender:
+        available = True
+
+        def send(self, virtual_input: str, value: str) -> None:
+            events.append((virtual_input, value))
+
+    sender = DummySender()
+
+    worker = BridgeWorker(
+        config,
+        sender_provider=lambda: sender,
+        global_stop=threading.Event(),
+        state_store=store,
+    )
+
+    mapping = VirtualInputConfig(
+        id="motion-1",
+        bridge_id="bridge-1",
+        resource_id="rid-motion",
+        resource_type="motion",
+        virtual_input="VI.Motion",
+        active_value="1",
+        inactive_value="0",
+        reset_value=None,
+        reset_delay_ms=0,
+    )
+    worker.update_mappings([mapping])
+
+    class DummyClient:
+        def __init__(self) -> None:
+            self.payloads: list[HueResource] = []
+
+        def get_motion_sensors(self):
+            return list(self.payloads)
+
+    dummy_client = DummyClient()
+    worker._client = dummy_client  # type: ignore[attr-defined]
+
+    def make_motion(state: bool) -> HueResource:
+        return HueResource(
+            id="rid-motion",
+            type="motion",
+            metadata={},
+            data={
+                "motion": {
+                    "motion_report": {
+                        "motion": state,
+                        "motion_valid": True,
+                    }
+                }
+            },
+        )
+
+    dummy_client.payloads = [make_motion(False)]
+    worker._poll_motion_states(sender)
+    assert events == []
+
+    dummy_client.payloads = [make_motion(True)]
+    worker._poll_motion_states(sender)
+    assert events == [("VI.Motion", "1")]
+
+    dummy_client.payloads = [make_motion(False)]
+    worker._poll_motion_states(sender)
+    assert events[-1] == ("VI.Motion", "0")
