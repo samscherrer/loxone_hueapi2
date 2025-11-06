@@ -64,6 +64,8 @@ def command_list_resources(args: argparse.Namespace) -> Dict[str, Any]:
         "lights": client.get_lights,
         "scenes": client.get_scenes,
         "rooms": client.get_rooms,
+        "buttons": client.get_buttons,
+        "motions": client.get_motion_sensors,
     }[args.type]
 
     try:
@@ -137,6 +139,28 @@ def command_list_resources(args: argparse.Namespace) -> Dict[str, Any]:
             item["rooms"] = room_lookup.get(resource.id, [])
             item["scenes"] = scene_lookup.get(resource.id, [])
 
+    if args.type == "buttons":
+        device_lookup: Dict[str, Dict[str, Any]] = {}
+        for device in client.get_devices():
+            device_lookup[device.id] = {
+                "name": _resource_name(device),
+                "id": device.id,
+            }
+        for resource, item in zip(resources, items):
+            owner = resource.data.get("owner")
+            if isinstance(owner, dict):
+                rid = owner.get("rid")
+                if isinstance(rid, str) and rid in device_lookup:
+                    item["device"] = device_lookup[rid]
+
+    if args.type == "motions":
+        for resource, item in zip(resources, items):
+            motion = resource.data.get("motion")
+            if isinstance(motion, dict):
+                report = motion.get("motion_report")
+                if isinstance(report, dict):
+                    item["state"] = report.get("motion")
+
     return {"items": items}
 
 
@@ -208,7 +232,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser_list.add_argument(
         "--type",
         dest="type",
-        choices=["lights", "scenes", "rooms"],
+        choices=["lights", "scenes", "rooms", "buttons", "motions"],
         required=True,
     )
 

@@ -34,4 +34,20 @@ else
 fi
 
 export PYTHONPATH="$PLUGIN_ROOT:${PYTHONPATH:-}"
-exec "$PYTHON_BIN" -m uvicorn hue_plugin.server:app --host 0.0.0.0 --port 5510
+
+cleanup() {
+  if [[ -n "${FORWARDER_PID:-}" ]]; then
+    kill "$FORWARDER_PID" >/dev/null 2>&1 || true
+    wait "$FORWARDER_PID" 2>/dev/null || true
+  fi
+}
+
+trap cleanup EXIT INT TERM
+
+"$PYTHON_BIN" -m hue_plugin.event_forwarder >/dev/null 2>&1 &
+FORWARDER_PID=$!
+
+"$PYTHON_BIN" -m uvicorn hue_plugin.server:app --host 0.0.0.0 --port 5510 "$@"
+status=$?
+cleanup
+exit $status

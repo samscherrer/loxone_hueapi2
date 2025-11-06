@@ -58,8 +58,14 @@ function plugin_config_path(): string
 
 function load_plugin_config(string $configPath): array
 {
+    $defaults = [
+        'bridges' => [],
+        'loxone' => default_loxone_settings(),
+        'virtual_inputs' => [],
+    ];
+
     if (!file_exists($configPath)) {
-        return ['bridges' => []];
+        return $defaults;
     }
 
     $raw = file_get_contents($configPath);
@@ -69,7 +75,7 @@ function load_plugin_config(string $configPath): array
 
     $raw = trim($raw);
     if ($raw === '') {
-        return ['bridges' => []];
+        return $defaults;
     }
 
     $decoded = json_decode($raw, true);
@@ -77,23 +83,38 @@ function load_plugin_config(string $configPath): array
         throw new RuntimeException('Ungültige Konfigurationsdatei.');
     }
 
+    $bridges = [];
     if (isset($decoded['bridges']) && is_array($decoded['bridges'])) {
-        $bridges = [];
         foreach ($decoded['bridges'] as $entry) {
             if (!is_array($entry)) {
                 continue;
             }
             $bridges[] = normalise_bridge($entry, $bridges);
         }
-        return ['bridges' => $bridges];
+    } elseif (isset($decoded['bridge_ip'], $decoded['application_key'])) {
+        $bridges[] = normalise_bridge($decoded, []);
     }
 
-    if (isset($decoded['bridge_ip'], $decoded['application_key'])) {
-        $bridge = normalise_bridge($decoded, []);
-        return ['bridges' => [$bridge]];
+    if (!$bridges) {
+        $bridges = [];
     }
 
-    return ['bridges' => []];
+    $loxone = isset($decoded['loxone']) ? normalise_loxone_settings($decoded['loxone']) : default_loxone_settings();
+    $virtualInputs = [];
+    if (isset($decoded['virtual_inputs']) && is_array($decoded['virtual_inputs'])) {
+        foreach ($decoded['virtual_inputs'] as $entry) {
+            if (!is_array($entry)) {
+                continue;
+            }
+            $virtualInputs[] = normalise_virtual_input($entry, $bridges, $virtualInputs);
+        }
+    }
+
+    return [
+        'bridges' => $bridges,
+        'loxone' => $loxone,
+        'virtual_inputs' => $virtualInputs,
+    ];
 }
 
 function save_plugin_config(string $configPath, array $config): void
@@ -103,18 +124,45 @@ function save_plugin_config(string $configPath, array $config): void
         throw new RuntimeException('Bridge-Liste ist ungültig.');
     }
 
+    $normalisedBridges = [];
+    foreach ($bridges as $bridge) {
+        if (!is_array($bridge)) {
+            continue;
+        }
+        $normalisedBridges[] = normalise_bridge($bridge, $normalisedBridges);
+    }
+
+    $loxone = isset($config['loxone']) ? normalise_loxone_settings($config['loxone']) : default_loxone_settings();
+
+    $virtualInputs = [];
+    if (isset($config['virtual_inputs']) && is_array($config['virtual_inputs'])) {
+        foreach ($config['virtual_inputs'] as $entry) {
+            if (!is_array($entry)) {
+                continue;
+            }
+            $virtualInputs[] = normalise_virtual_input($entry, $normalisedBridges, $virtualInputs);
+        }
+    }
+
+    $payload = json_encode(
+        [
+            'bridges' => array_values($normalisedBridges),
+            'loxone' => $loxone,
+            'virtual_inputs' => array_values($virtualInputs),
+        ],
+        JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE
+    );
+    if ($payload === false) {
+        throw new RuntimeException('Konfiguration konnte nicht serialisiert werden.');
+    }
+    $payload .= "\n";
+
     $dir = dirname($configPath);
     if (!is_dir($dir)) {
         if (!mkdir($dir, 0775, true) && !is_dir($dir)) {
             throw new RuntimeException('Konfigurationsverzeichnis konnte nicht erstellt werden.');
         }
     }
-
-    $payload = json_encode(['bridges' => array_values($bridges)], JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
-    if ($payload === false) {
-        throw new RuntimeException('Konfiguration konnte nicht serialisiert werden.');
-    }
-    $payload .= "\n";
 
     $tmpPath = $configPath . '.tmp';
     if (file_put_contents($tmpPath, $payload, LOCK_EX) === false) {
@@ -201,6 +249,143 @@ function slugify(string $value): string
     $value = strtolower(trim($value));
     $value = preg_replace('/[^a-z0-9]+/', '-', $value) ?? '';
     return trim($value, '-');
+}
+
+function default_loxone_settings(): array
+{
+    return [
+        'base_url' => null,
+        'command_method' => 'POST',
+        'event_method' => 'POST',
+    ];
+}
+
+function normalise_loxone_settings($value): array
+{
+    $defaults = default_loxone_settings();
+    if (!is_array($value)) {
+        return $defaults;
+    }
+
+    $baseUrl = isset($value['base_url']) && is_string($value['base_url'])
+        ? trim($value['base_url'])
+        : '';
+    $baseUrl = $baseUrl !== '' ? $baseUrl : null;
+
+    $commandMethod = isset($value['command_method']) && is_string($value['command_method'])
+        ? strtoupper(trim($value['command_method']))
+        : 'POST';
+    if (!in_array($commandMethod, ['GET', 'POST'], true)) {
+        $commandMethod = 'POST';
+    }
+
+    $eventMethod = isset($value['event_method']) && is_string($value['event_method'])
+        ? strtoupper(trim($value['event_method']))
+        : $commandMethod;
+    if (!in_array($eventMethod, ['GET', 'POST'], true)) {
+        $eventMethod = $commandMethod;
+    }
+
+    return [
+        'base_url' => $baseUrl,
+        'command_method' => $commandMethod,
+        'event_method' => $eventMethod,
+    ];
+}
+
+function generate_virtual_input_id(?string $name, string $bridgeId, string $resourceId, array $existing): string
+{
+    $base = $name ? slugify($name) : '';
+    if ($base === '') {
+        $base = slugify($bridgeId . '-' . substr($resourceId, 0, 8));
+    }
+    if ($base === '') {
+        $base = 'input';
+    }
+
+    $ids = array_map(
+        function (array $entry): string {
+            return $entry['id'];
+        },
+        $existing
+    );
+
+    if (!in_array($base, $ids, true)) {
+        return $base;
+    }
+
+    $counter = 1;
+    while (in_array(sprintf('%s-%d', $base, $counter), $ids, true)) {
+        $counter++;
+    }
+
+    return sprintf('%s-%d', $base, $counter);
+}
+
+function normalise_virtual_input(array $entry, array $bridges, array $existing): array
+{
+    $bridgeId = isset($entry['bridge_id']) ? trim((string) $entry['bridge_id']) : '';
+    if ($bridgeId === '') {
+        throw new RuntimeException('Bridge-ID fehlt für den Eingangs-Mapping-Eintrag.');
+    }
+
+    $bridgeExists = false;
+    foreach ($bridges as $bridge) {
+        if ($bridge['id'] === $bridgeId) {
+            $bridgeExists = true;
+            break;
+        }
+    }
+    if (!$bridgeExists) {
+        throw new RuntimeException(sprintf("Unbekannte Bridge-ID '%s' für Eingangs-Mapping.", $bridgeId));
+    }
+
+    $resourceId = isset($entry['resource_id']) ? trim((string) $entry['resource_id']) : '';
+    if ($resourceId === '') {
+        throw new RuntimeException('Resource-ID für den Eingangs-Mapping-Eintrag fehlt.');
+    }
+
+    $resourceType = isset($entry['resource_type']) ? trim((string) $entry['resource_type']) : '';
+    if ($resourceType === '') {
+        throw new RuntimeException('Resource-Typ für den Eingangs-Mapping-Eintrag fehlt.');
+    }
+
+    $virtualInput = isset($entry['virtual_input']) ? trim((string) $entry['virtual_input']) : '';
+    if ($virtualInput === '') {
+        throw new RuntimeException('Virtueller Eingang muss angegeben werden.');
+    }
+
+    $name = isset($entry['name']) && $entry['name'] !== '' ? (string) $entry['name'] : null;
+    $trigger = isset($entry['trigger']) && $entry['trigger'] !== '' ? (string) $entry['trigger'] : null;
+    $activeValue = isset($entry['active_value']) ? (string) $entry['active_value'] : '1';
+    $inactiveValue = isset($entry['inactive_value']) && $entry['inactive_value'] !== ''
+        ? (string) $entry['inactive_value']
+        : null;
+    $resetValue = isset($entry['reset_value']) && $entry['reset_value'] !== ''
+        ? (string) $entry['reset_value']
+        : null;
+    $resetDelay = isset($entry['reset_delay_ms']) ? (int) $entry['reset_delay_ms'] : 250;
+    if ($resetDelay < 0) {
+        $resetDelay = 0;
+    }
+
+    $id = isset($entry['id']) && $entry['id'] !== ''
+        ? (string) $entry['id']
+        : generate_virtual_input_id($name, $bridgeId, $resourceId, $existing);
+
+    return [
+        'id' => $id,
+        'name' => $name,
+        'bridge_id' => $bridgeId,
+        'resource_id' => $resourceId,
+        'resource_type' => $resourceType,
+        'virtual_input' => $virtualInput,
+        'trigger' => $trigger,
+        'active_value' => $activeValue,
+        'inactive_value' => $inactiveValue,
+        'reset_value' => $resetValue,
+        'reset_delay_ms' => $resetDelay,
+    ];
 }
 
 function read_json_body(): array
@@ -511,7 +696,8 @@ function handle_ajax(string $configPath): void
                     $bridges[] = $bridgeResponse;
                 }
 
-                save_plugin_config($configPath, ['bridges' => $bridges]);
+                $config['bridges'] = array_values($bridges);
+                save_plugin_config($configPath, $config);
                 respond_json(['bridge' => $bridgeResponse]);
                 break;
 
@@ -528,7 +714,72 @@ function handle_ajax(string $configPath): void
                         return $bridge['id'] !== $identifier;
                     }
                 ));
-                save_plugin_config($configPath, ['bridges' => $bridges]);
+                $config['bridges'] = $bridges;
+                save_plugin_config($configPath, $config);
+                respond_json(['ok' => true]);
+                break;
+
+            case 'load_settings':
+                $config = load_plugin_config($configPath);
+                respond_json([
+                    'loxone' => $config['loxone'],
+                    'virtual_inputs' => $config['virtual_inputs'],
+                ]);
+                break;
+
+            case 'save_loxone_settings':
+                $payload = read_json_body();
+                $config = load_plugin_config($configPath);
+                $config['loxone'] = normalise_loxone_settings($payload);
+                save_plugin_config($configPath, $config);
+                respond_json(['loxone' => $config['loxone']]);
+                break;
+
+            case 'save_virtual_input':
+                $payload = read_json_body();
+                $config = load_plugin_config($configPath);
+                $existing = $config['virtual_inputs'];
+                $identifier = isset($payload['id']) && is_string($payload['id']) && $payload['id'] !== ''
+                    ? $payload['id']
+                    : null;
+                if ($identifier !== null) {
+                    $existing = array_values(array_filter(
+                        $existing,
+                        function (array $entry) use ($identifier): bool {
+                            return $entry['id'] !== $identifier;
+                        }
+                    ));
+                }
+                $entry = normalise_virtual_input($payload, $config['bridges'], $existing);
+                $updated = false;
+                foreach ($config['virtual_inputs'] as $index => $current) {
+                    if ($current['id'] === $entry['id']) {
+                        $config['virtual_inputs'][$index] = $entry;
+                        $updated = true;
+                        break;
+                    }
+                }
+                if (!$updated) {
+                    $config['virtual_inputs'][] = $entry;
+                }
+                save_plugin_config($configPath, $config);
+                respond_json(['virtual_input' => $entry]);
+                break;
+
+            case 'delete_virtual_input':
+                $payload = read_json_body();
+                $identifier = trim((string) ($payload['id'] ?? ''));
+                if ($identifier === '') {
+                    throw new RuntimeException('ID des virtuellen Eingangs fehlt.');
+                }
+                $config = load_plugin_config($configPath);
+                $config['virtual_inputs'] = array_values(array_filter(
+                    $config['virtual_inputs'],
+                    function (array $entry) use ($identifier): bool {
+                        return $entry['id'] !== $identifier;
+                    }
+                ));
+                save_plugin_config($configPath, $config);
                 respond_json(['ok' => true]);
                 break;
 
@@ -1093,7 +1344,10 @@ header('Content-Type: text/html; charset=utf-8');
         <p class="muted">
           Wähle den Pfad für deine Befehle und hinterlege optional Zugangsdaten, falls der
           Administrationsbereich des LoxBerry per HTTP-Auth geschützt ist. Die Angaben werden nur
-          für die erzeugten URLs verwendet.
+          für die erzeugten URLs verwendet. Trage im virtuellen Ausgang von Loxone im Hauptelement
+          die vollständige Basis-URL inklusive Benutzername und Passwort ein (z.&nbsp;B.
+          <code>http://loxberry:deinpasswort@loxberry</code>) und stelle die HTTP-Methode in Loxone
+          auf <strong>POST</strong>.
         </p>
         <div class="grid two">
           <div>
@@ -1134,6 +1388,138 @@ header('Content-Type: text/html; charset=utf-8');
             </p>
           </div>
         </div>
+      </section>
+
+      <section class="card">
+        <h2>Loxone-Miniserver</h2>
+        <p class="muted">
+          Hinterlege hier die Basis-URL deines Miniservers inklusive Zugangsdaten sowie die
+          bevorzugten HTTP-Methoden für Befehle und Sensor-Rückmeldungen. Die Angaben werden für die
+          Weiterleitung von Hue-Ereignissen an virtuelle Eingänge verwendet.
+        </p>
+        <form id="loxone-settings-form">
+          <div class="grid two">
+            <div>
+              <label for="loxone-base-url">Basis-URL des Miniservers</label>
+              <input
+                type="text"
+                id="loxone-base-url"
+                placeholder="http://benutzer:passwort@miniserver"
+                autocomplete="off"
+              />
+              <p class="form-note">
+                Beispiel: <code>http://admin:pass@192.168.1.10</code>. Die Zugangsdaten werden in der
+                Konfiguration gespeichert, damit das Plugin virtuelle Eingänge auslösen kann.
+              </p>
+            </div>
+            <div>
+              <label for="loxone-command-method">HTTP-Methode für Befehle</label>
+              <select id="loxone-command-method">
+                <option value="POST">POST (empfohlen)</option>
+                <option value="GET">GET</option>
+              </select>
+              <label for="loxone-event-method" style="margin-top:1rem;display:block;">HTTP-Methode für Eingänge</label>
+              <select id="loxone-event-method">
+                <option value="POST">POST (empfohlen)</option>
+                <option value="GET">GET</option>
+              </select>
+            </div>
+          </div>
+          <div class="actions">
+            <button type="submit">Speichern</button>
+          </div>
+        </form>
+        <div id="loxone-settings-message" class="message"></div>
+      </section>
+
+      <section class="card">
+        <h2>Hue → Loxone Eingänge</h2>
+        <p class="muted">
+          Lege fest, welche Hue-Schalter oder Bewegungsmelder virtuelle Eingänge in Loxone auslösen
+          sollen. Für Taster kannst du optional einen Reset-Wert definieren, der nach Ablauf einer
+          kurzen Zeitspanne gesendet wird.
+        </p>
+        <div id="virtual-input-list" class="muted">
+          <p>Noch keine Eingänge angelegt.</p>
+        </div>
+        <form id="virtual-input-form" style="margin-top: 1.2rem">
+          <input type="hidden" id="virtual-input-id" />
+          <div class="grid two">
+            <div>
+              <label for="virtual-input-name">Bezeichnung (optional)</label>
+              <input type="text" id="virtual-input-name" placeholder="z. B. Wohnzimmer-Schalter" />
+            </div>
+            <div>
+              <label for="virtual-input-bridge">Bridge *</label>
+              <select id="virtual-input-bridge" required></select>
+            </div>
+          </div>
+          <div class="grid two">
+            <div>
+              <label for="virtual-input-type">Ressourcentyp *</label>
+              <select id="virtual-input-type">
+                <option value="button">Schalter / Button</option>
+                <option value="motion">Bewegungsmelder</option>
+              </select>
+            </div>
+            <div>
+              <label for="virtual-input-rid">Ressourcen-RID *</label>
+              <input type="text" id="virtual-input-rid" placeholder="UUID aus Hue" />
+            </div>
+          </div>
+          <div class="grid two" data-role="trigger-field">
+            <div>
+              <label for="virtual-input-trigger">Trigger / Aktion</label>
+              <input
+                type="text"
+                id="virtual-input-trigger"
+                placeholder="z. B. short_press"
+              />
+              <p class="form-note">
+                Für Hue-Taster: <code>short_press</code>, <code>long_press</code>, <code>repeat</code>
+                usw. Leer lassen, um alle Ereignisse zu melden.
+              </p>
+            </div>
+            <div>
+              <label for="virtual-input-target">Virtueller Eingang *</label>
+              <input
+                type="text"
+                id="virtual-input-target"
+                placeholder="Name des virtuellen Eingangs in Loxone"
+              />
+            </div>
+          </div>
+          <div class="grid two">
+            <div>
+              <label for="virtual-input-active">Aktiver Wert *</label>
+              <input type="text" id="virtual-input-active" value="1" />
+            </div>
+            <div data-role="inactive-field">
+              <label for="virtual-input-inactive">Inaktiver Wert</label>
+              <input type="text" id="virtual-input-inactive" placeholder="z. B. 0" />
+            </div>
+          </div>
+          <div class="grid two" data-role="reset-field">
+            <div>
+              <label for="virtual-input-reset">Reset-Wert</label>
+              <input type="text" id="virtual-input-reset" placeholder="z. B. 0" />
+            </div>
+            <div>
+              <label for="virtual-input-delay">Reset-Verzögerung (ms)</label>
+              <input type="number" id="virtual-input-delay" value="250" min="0" step="50" />
+            </div>
+          </div>
+          <div class="actions">
+            <button type="submit">Speichern</button>
+            <button type="button" id="virtual-input-reset-form" class="secondary">
+              Formular leeren
+            </button>
+            <button type="button" id="virtual-input-delete" class="danger" hidden>
+              Eintrag löschen
+            </button>
+          </div>
+        </form>
+        <div id="virtual-input-message" class="message"></div>
       </section>
 
       <section class="card">
@@ -1237,19 +1623,45 @@ header('Content-Type: text/html; charset=utf-8');
       const commandBaseSelect = document.getElementById('command-base-path');
       const authUserInput = document.getElementById('loxone-auth-user');
       const authPasswordInput = document.getElementById('loxone-auth-password');
+      const loxoneSettingsForm = document.getElementById('loxone-settings-form');
+      const loxoneBaseInput = document.getElementById('loxone-base-url');
+      const loxoneCommandMethodSelect = document.getElementById('loxone-command-method');
+      const loxoneEventMethodSelect = document.getElementById('loxone-event-method');
+      const loxoneSettingsMessage = document.getElementById('loxone-settings-message');
+      const virtualInputList = document.getElementById('virtual-input-list');
+      const virtualInputForm = document.getElementById('virtual-input-form');
+      const virtualInputMessage = document.getElementById('virtual-input-message');
+      const virtualInputIdInput = document.getElementById('virtual-input-id');
+      const virtualInputNameInput = document.getElementById('virtual-input-name');
+      const virtualInputBridgeSelect = document.getElementById('virtual-input-bridge');
+      const virtualInputTypeSelect = document.getElementById('virtual-input-type');
+      const virtualInputRidInput = document.getElementById('virtual-input-rid');
+      const virtualInputTriggerInput = document.getElementById('virtual-input-trigger');
+      const virtualInputTargetInput = document.getElementById('virtual-input-target');
+      const virtualInputActiveInput = document.getElementById('virtual-input-active');
+      const virtualInputInactiveInput = document.getElementById('virtual-input-inactive');
+      const virtualInputResetInput = document.getElementById('virtual-input-reset');
+      const virtualInputDelayInput = document.getElementById('virtual-input-delay');
+      const virtualInputResetButton = document.getElementById('virtual-input-reset-form');
+      const virtualInputDeleteButton = document.getElementById('virtual-input-delete');
 
       const state = {
         bridges: [],
         activeBridgeId: null,
         commandTarget: 'public',
+        commandMethod: 'POST',
+        eventMethod: 'POST',
+        loxoneBaseUrl: '',
+        virtualInputs: [],
+        editingVirtualInputId: null,
       };
 
       const LIGHT_HELPER_DEFAULT =
         'Nachdem du eine Bridge und Lampen-RID gewählt hast, erscheinen hier die fertigen HTTP-Aufrufe ' +
-        'für einen virtuellen Ausgang in Loxone (Wert 1 = EIN, Wert 0 = AUS).';
+        'für einen virtuellen Ausgang in Loxone (Wert 1 = EIN, Wert 0 = AUS). Verwende sie mit der HTTP-Methode POST.';
       const SCENE_HELPER_DEFAULT =
         'Hier findest du nach Auswahl einer Bridge und Szene die beiden URLs für deinen virtuellen Ausgang. ' +
-        'Wert 1 aktiviert die Szene, Wert 0 schaltet den zugehörigen Raum bzw. die Zone aus.';
+        'Wert 1 aktiviert die Szene, Wert 0 schaltet den zugehörigen Raum bzw. die Zone aus. Verwende die URLs mit der HTTP-Methode POST.';
 
       const ensureHelperMessage = (container, text) => {
         if (!container) {
@@ -1342,6 +1754,216 @@ header('Content-Type: text/html; charset=utf-8');
         return url.toString();
       };
 
+      const renderLoxoneSettings = () => {
+        if (loxoneBaseInput) {
+          loxoneBaseInput.value = state.loxoneBaseUrl || '';
+        }
+        if (loxoneCommandMethodSelect) {
+          loxoneCommandMethodSelect.value = state.commandMethod || 'POST';
+        }
+        if (loxoneEventMethodSelect) {
+          loxoneEventMethodSelect.value = state.eventMethod || state.commandMethod || 'POST';
+        }
+      };
+
+      const updateVirtualInputFieldVisibility = () => {
+        if (!virtualInputTypeSelect || !virtualInputForm) {
+          return;
+        }
+        const type = virtualInputTypeSelect.value;
+        const triggerField = virtualInputForm.querySelector('[data-role="trigger-field"]');
+        const resetField = virtualInputForm.querySelector('[data-role="reset-field"]');
+        if (triggerField) {
+          triggerField.style.display = type === 'button' ? '' : 'none';
+        }
+        if (resetField) {
+          resetField.style.display = type === 'button' ? '' : 'none';
+        }
+      };
+
+      const renderVirtualInputForm = (entry = null) => {
+        if (!virtualInputForm) {
+          return;
+        }
+
+        if (virtualInputBridgeSelect) {
+          virtualInputBridgeSelect.innerHTML = '';
+          if (!state.bridges.length) {
+            const option = document.createElement('option');
+            option.textContent = 'Keine Bridge verfügbar';
+            option.disabled = true;
+            option.selected = true;
+            virtualInputBridgeSelect.appendChild(option);
+            virtualInputBridgeSelect.disabled = true;
+          } else {
+            virtualInputBridgeSelect.disabled = false;
+            const placeholder = document.createElement('option');
+            placeholder.value = '';
+            placeholder.textContent = 'Bridge auswählen';
+            placeholder.disabled = true;
+            placeholder.selected = true;
+            virtualInputBridgeSelect.appendChild(placeholder);
+            state.bridges.forEach((bridge) => {
+              const option = document.createElement('option');
+              option.value = bridge.id;
+              option.textContent = bridge.name ? `${bridge.name} (${bridge.id})` : bridge.id;
+              virtualInputBridgeSelect.appendChild(option);
+            });
+          }
+        }
+
+        if (!entry) {
+          if (virtualInputIdInput) {
+            virtualInputIdInput.value = '';
+          }
+          if (virtualInputNameInput) {
+            virtualInputNameInput.value = '';
+          }
+          if (virtualInputBridgeSelect) {
+            virtualInputBridgeSelect.value = '';
+          }
+          if (virtualInputTypeSelect) {
+            virtualInputTypeSelect.value = 'button';
+          }
+          if (virtualInputRidInput) {
+            virtualInputRidInput.value = '';
+          }
+          if (virtualInputTriggerInput) {
+            virtualInputTriggerInput.value = '';
+          }
+          if (virtualInputTargetInput) {
+            virtualInputTargetInput.value = '';
+          }
+          if (virtualInputActiveInput) {
+            virtualInputActiveInput.value = '1';
+          }
+          if (virtualInputInactiveInput) {
+            virtualInputInactiveInput.value = '';
+          }
+          if (virtualInputResetInput) {
+            virtualInputResetInput.value = '';
+          }
+          if (virtualInputDelayInput) {
+            virtualInputDelayInput.value = '250';
+          }
+          if (virtualInputDeleteButton) {
+            virtualInputDeleteButton.hidden = true;
+          }
+          state.editingVirtualInputId = null;
+          message(virtualInputMessage, '', '');
+        } else {
+          if (virtualInputIdInput) {
+            virtualInputIdInput.value = entry.id;
+          }
+          if (virtualInputNameInput) {
+            virtualInputNameInput.value = entry.name || '';
+          }
+          if (virtualInputBridgeSelect) {
+            virtualInputBridgeSelect.value = entry.bridge_id || '';
+          }
+          if (virtualInputTypeSelect) {
+            virtualInputTypeSelect.value = entry.resource_type || 'button';
+          }
+          if (virtualInputRidInput) {
+            virtualInputRidInput.value = entry.resource_id || '';
+          }
+          if (virtualInputTriggerInput) {
+            virtualInputTriggerInput.value = entry.trigger || '';
+          }
+          if (virtualInputTargetInput) {
+            virtualInputTargetInput.value = entry.virtual_input || '';
+          }
+          if (virtualInputActiveInput) {
+            virtualInputActiveInput.value = entry.active_value || '1';
+          }
+          if (virtualInputInactiveInput) {
+            virtualInputInactiveInput.value = entry.inactive_value || '';
+          }
+          if (virtualInputResetInput) {
+            virtualInputResetInput.value = entry.reset_value || '';
+          }
+          if (virtualInputDelayInput) {
+            virtualInputDelayInput.value = String(entry.reset_delay_ms ?? 250);
+          }
+          if (virtualInputDeleteButton) {
+            virtualInputDeleteButton.hidden = false;
+          }
+          state.editingVirtualInputId = entry.id;
+        }
+
+        updateVirtualInputFieldVisibility();
+      };
+
+      const renderVirtualInputList = () => {
+        if (!virtualInputList) {
+          return;
+        }
+        virtualInputList.innerHTML = '';
+        if (!state.virtualInputs.length) {
+          const paragraph = document.createElement('p');
+          paragraph.className = 'muted';
+          paragraph.textContent = 'Noch keine Eingänge angelegt.';
+          virtualInputList.appendChild(paragraph);
+          return;
+        }
+
+        const list = document.createElement('ul');
+        list.className = 'bridge-items';
+        state.virtualInputs.forEach((entry) => {
+          const item = document.createElement('li');
+          item.className = 'bridge-item';
+          const info = document.createElement('div');
+          const title = document.createElement('strong');
+          title.textContent = entry.name || entry.virtual_input;
+          info.appendChild(title);
+
+          const details = document.createElement('div');
+          details.className = 'resource-detail';
+          details.textContent = `Bridge: ${entry.bridge_id} • Typ: ${entry.resource_type} • RID: ${entry.resource_id}`;
+          info.appendChild(details);
+
+          if (entry.trigger) {
+            const triggerInfo = document.createElement('div');
+            triggerInfo.className = 'resource-detail';
+            triggerInfo.textContent = `Trigger: ${entry.trigger}`;
+            info.appendChild(triggerInfo);
+          }
+
+          const valueInfo = document.createElement('div');
+          valueInfo.className = 'resource-detail';
+          const parts = [`Aktiv: ${entry.active_value}`];
+          if (entry.inactive_value) {
+            parts.push(`Inaktiv: ${entry.inactive_value}`);
+          }
+          if (entry.reset_value) {
+            parts.push(`Reset: ${entry.reset_value} (${entry.reset_delay_ms} ms)`);
+          }
+          valueInfo.textContent = parts.join(' • ');
+          info.appendChild(valueInfo);
+
+          const actions = document.createElement('div');
+          actions.className = 'bridge-actions';
+          const editButton = document.createElement('button');
+          editButton.type = 'button';
+          editButton.className = 'secondary';
+          editButton.textContent = 'Bearbeiten';
+          editButton.dataset.action = 'edit-virtual-input';
+          editButton.dataset.id = entry.id;
+          const deleteButton = document.createElement('button');
+          deleteButton.type = 'button';
+          deleteButton.className = 'danger';
+          deleteButton.textContent = 'Löschen';
+          deleteButton.dataset.action = 'delete-virtual-input';
+          deleteButton.dataset.id = entry.id;
+          actions.append(editButton, deleteButton);
+
+          item.append(info, actions);
+          list.appendChild(item);
+        });
+
+        virtualInputList.appendChild(list);
+      };
+
       const updateLightCommandHelper = () => {
         if (!lightCommandHelper) {
           return;
@@ -1366,7 +1988,8 @@ header('Content-Type: text/html; charset=utf-8');
         }
         const offParams = { ...baseParams, on: '0' };
         const commandOptions = { target: getCommandTarget(), auth: getCommandAuth() };
-        renderHelperRows(lightCommandHelper, 'URLs für den virtuellen Ausgang (GET-Befehl in Loxone):', [
+        const methodLabel = state.commandMethod || 'POST';
+        renderHelperRows(lightCommandHelper, `Virtueller Ausgang (HTTP ${methodLabel}):`, [
           { label: 'Virtueller Ausgang – EIN (Wert 1):', url: buildUrl('light_command', onParams, commandOptions) },
           { label: 'Virtueller Ausgang – AUS (Wert 0):', url: buildUrl('light_command', offParams, commandOptions) },
         ]);
@@ -1411,7 +2034,8 @@ header('Content-Type: text/html; charset=utf-8');
         const onParams = { ...baseParams, state: '1' };
         const offParams = { ...baseParams, state: '0' };
         const commandOptions = { target: getCommandTarget(), auth: getCommandAuth() };
-        renderHelperRows(sceneCommandHelper, 'Nutze diese URLs im virtuellen Ausgang von Loxone:', [
+        const methodLabel = state.commandMethod || 'POST';
+        renderHelperRows(sceneCommandHelper, `Virtueller Ausgang (HTTP ${methodLabel}):`, [
           { label: 'Virtueller Ausgang – EIN (Wert 1):', url: buildUrl('scene_command', onParams, commandOptions) },
           { label: 'Virtueller Ausgang – AUS (Wert 0):', url: buildUrl('scene_command', offParams, commandOptions) },
         ]);
@@ -1442,6 +2066,19 @@ header('Content-Type: text/html; charset=utf-8');
 
       if (authPasswordInput) {
         authPasswordInput.addEventListener('input', handleAuthChange);
+      }
+
+      if (loxoneCommandMethodSelect) {
+        loxoneCommandMethodSelect.addEventListener('change', () => {
+          state.commandMethod = loxoneCommandMethodSelect.value || 'POST';
+          updateCommandHelpers();
+        });
+      }
+
+      if (loxoneEventMethodSelect) {
+        loxoneEventMethodSelect.addEventListener('change', () => {
+          state.eventMethod = loxoneEventMethodSelect.value || state.commandMethod || 'POST';
+        });
       }
 
       const apiFetch = async (action, { method = 'GET', body, params = {} } = {}) => {
@@ -1583,6 +2220,7 @@ header('Content-Type: text/html; charset=utf-8');
           }
           renderBridgeSelect();
           renderBridgeList();
+          renderVirtualInputForm();
           updateCommandHelpers();
         } catch (error) {
           message(bridgeMessage, 'error', error.message);
@@ -1590,7 +2228,25 @@ header('Content-Type: text/html; charset=utf-8');
           state.activeBridgeId = null;
           renderBridgeSelect();
           renderBridgeList();
+          renderVirtualInputForm();
           updateCommandHelpers();
+        }
+      };
+
+      const loadSettings = async () => {
+        try {
+          const data = await apiFetch('load_settings');
+          const loxone = data.loxone || {};
+          state.loxoneBaseUrl = loxone.base_url || '';
+          state.commandMethod = loxone.command_method || 'POST';
+          state.eventMethod = loxone.event_method || state.commandMethod || 'POST';
+          state.virtualInputs = Array.isArray(data.virtual_inputs) ? data.virtual_inputs : [];
+          renderLoxoneSettings();
+          renderVirtualInputList();
+          renderVirtualInputForm();
+          updateCommandHelpers();
+        } catch (error) {
+          message(loxoneSettingsMessage, 'error', `Einstellungen konnten nicht geladen werden: ${error.message}`);
         }
       };
 
@@ -1643,6 +2299,153 @@ header('Content-Type: text/html; charset=utf-8');
         event.preventDefault();
         resetBridgeForm();
       });
+
+      if (loxoneSettingsForm) {
+        loxoneSettingsForm.addEventListener('submit', async (event) => {
+          event.preventDefault();
+          const payload = {
+            base_url: loxoneBaseInput ? loxoneBaseInput.value.trim() : '',
+            command_method: loxoneCommandMethodSelect ? loxoneCommandMethodSelect.value : 'POST',
+            event_method: loxoneEventMethodSelect ? loxoneEventMethodSelect.value : state.eventMethod || 'POST',
+          };
+          try {
+            const data = await apiFetch('save_loxone_settings', { method: 'POST', body: payload });
+            const loxone = data.loxone || {};
+            state.loxoneBaseUrl = loxone.base_url || '';
+            state.commandMethod = loxone.command_method || 'POST';
+            state.eventMethod = loxone.event_method || state.commandMethod || 'POST';
+            renderLoxoneSettings();
+            message(loxoneSettingsMessage, 'success', 'Einstellungen gespeichert.');
+            updateCommandHelpers();
+          } catch (error) {
+            message(loxoneSettingsMessage, 'error', error.message);
+          }
+        });
+      }
+
+      if (virtualInputTypeSelect) {
+        virtualInputTypeSelect.addEventListener('change', updateVirtualInputFieldVisibility);
+      }
+
+      if (virtualInputResetButton) {
+        virtualInputResetButton.addEventListener('click', (event) => {
+          event.preventDefault();
+          renderVirtualInputForm();
+        });
+      }
+
+      if (virtualInputDeleteButton) {
+        virtualInputDeleteButton.addEventListener('click', async () => {
+          if (!state.editingVirtualInputId) {
+            return;
+          }
+          if (!window.confirm('Virtuellen Eingang wirklich löschen?')) {
+            return;
+          }
+          try {
+            await apiFetch('delete_virtual_input', { method: 'POST', body: { id: state.editingVirtualInputId } });
+            state.virtualInputs = state.virtualInputs.filter((entry) => entry.id !== state.editingVirtualInputId);
+            message(virtualInputMessage, 'success', 'Eingang gelöscht.');
+            renderVirtualInputList();
+            renderVirtualInputForm();
+          } catch (error) {
+            message(virtualInputMessage, 'error', error.message);
+          }
+        });
+      }
+
+      if (virtualInputList) {
+        virtualInputList.addEventListener('click', async (event) => {
+          const target = event.target;
+          if (!(target instanceof HTMLElement)) {
+            return;
+          }
+          const action = target.dataset.action;
+          const id = target.dataset.id;
+          if (!action || !id) {
+            return;
+          }
+          const entry = state.virtualInputs.find((item) => item.id === id);
+          if (!entry) {
+            return;
+          }
+          if (action === 'edit-virtual-input') {
+            renderVirtualInputForm(entry);
+            message(virtualInputMessage, '', '');
+            window.scrollTo({ top: virtualInputForm.offsetTop - 40, behavior: 'smooth' });
+          } else if (action === 'delete-virtual-input') {
+            if (!window.confirm('Virtuellen Eingang wirklich löschen?')) {
+              return;
+            }
+            try {
+              await apiFetch('delete_virtual_input', { method: 'POST', body: { id } });
+              state.virtualInputs = state.virtualInputs.filter((item) => item.id !== id);
+              message(virtualInputMessage, 'success', 'Eingang gelöscht.');
+              renderVirtualInputList();
+              renderVirtualInputForm();
+            } catch (error) {
+              message(virtualInputMessage, 'error', error.message);
+            }
+          }
+        });
+      }
+
+      if (virtualInputForm) {
+        virtualInputForm.addEventListener('submit', async (event) => {
+          event.preventDefault();
+          if (!state.bridges.length) {
+            message(virtualInputMessage, 'error', 'Bitte zuerst mindestens eine Bridge anlegen.');
+            return;
+          }
+          const bridgeId = virtualInputBridgeSelect ? virtualInputBridgeSelect.value.trim() : '';
+          const resourceType = virtualInputTypeSelect ? virtualInputTypeSelect.value : 'button';
+          const resourceId = virtualInputRidInput ? virtualInputRidInput.value.trim() : '';
+          const target = virtualInputTargetInput ? virtualInputTargetInput.value.trim() : '';
+          const activeValue = virtualInputActiveInput ? virtualInputActiveInput.value.trim() : '';
+          if (!bridgeId || !resourceId || !target || !activeValue) {
+            message(virtualInputMessage, 'error', 'Bridge, Ressourcen-RID, virtueller Eingang und aktiver Wert sind Pflichtfelder.');
+            return;
+          }
+          const inactiveValue = virtualInputInactiveInput ? virtualInputInactiveInput.value.trim() : '';
+          const resetValue = virtualInputResetInput ? virtualInputResetInput.value.trim() : '';
+          const delayValue = virtualInputDelayInput ? parseInt(virtualInputDelayInput.value, 10) : 250;
+          const payload = {
+            id: state.editingVirtualInputId,
+            name: virtualInputNameInput ? virtualInputNameInput.value.trim() : '',
+            bridge_id: bridgeId,
+            resource_type: resourceType,
+            resource_id: resourceId,
+            trigger: virtualInputTriggerInput ? virtualInputTriggerInput.value.trim() : '',
+            virtual_input: target,
+            active_value: activeValue,
+            inactive_value: inactiveValue,
+            reset_value: resetValue,
+            reset_delay_ms: Number.isFinite(delayValue) && delayValue >= 0 ? delayValue : 0,
+          };
+          try {
+            const data = await apiFetch('save_virtual_input', { method: 'POST', body: payload });
+            const entry = data.virtual_input;
+            if (!entry) {
+              throw new Error('Antwort enthielt keinen virtuellen Eingang.');
+            }
+            const existingIndex = state.virtualInputs.findIndex((item) => item.id === entry.id);
+            if (existingIndex >= 0) {
+              state.virtualInputs[existingIndex] = entry;
+            } else {
+              state.virtualInputs.push(entry);
+            }
+            message(virtualInputMessage, 'success', 'Eingang gespeichert.');
+            renderVirtualInputList();
+            if (state.editingVirtualInputId) {
+              renderVirtualInputForm(entry);
+            } else {
+              renderVirtualInputForm();
+            }
+          } catch (error) {
+            message(virtualInputMessage, 'error', error.message);
+          }
+        });
+      }
 
       bridgeSelect.addEventListener('change', (event) => {
         setActiveBridge(event.target.value || null);
@@ -1866,6 +2669,7 @@ header('Content-Type: text/html; charset=utf-8');
       });
 
       updateCommandHelpers();
+      loadSettings();
       loadBridges();
     </script>
   </body>

@@ -1,8 +1,9 @@
 """Client for Philips Hue API v2 resources."""
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
-from typing import Any, Dict, Iterable, Optional
+from typing import Any, Dict, Iterable, Iterator, List, Optional
 
 import requests
 from requests import Response
@@ -68,6 +69,21 @@ class HueBridgeClient:
         """Return grouped lights for rooms or zones."""
 
         return self._list_resources("grouped_light")
+
+    def get_buttons(self) -> Iterable[HueResource]:
+        """Return button resources for Hue switches."""
+
+        return self._list_resources("button")
+
+    def get_motion_sensors(self) -> Iterable[HueResource]:
+        """Return motion sensor resources."""
+
+        return self._list_resources("motion")
+
+    def get_devices(self) -> Iterable[HueResource]:
+        """Return Hue devices."""
+
+        return self._list_resources("device")
 
     def get_scene(self, scene_id: str) -> HueResource:
         """Return a single scene resource."""
@@ -210,6 +226,51 @@ class HueBridgeClient:
             raise HueBridgeError(hint) from exc
         except requests_exc.RequestException as exc:  # pragma: no cover - defensive
             raise HueBridgeError(f"Verbindung zur Hue Bridge fehlgeschlagen: {exc}") from exc
+
+    def iter_events(self) -> Iterator[_JSON]:
+        """Yield raw event payloads from the Hue event stream."""
+
+        protocol = "https" if self._config.use_https else "http"
+        url = f"{protocol}://{self._config.bridge_ip}/eventstream/clip/v2"
+        headers = {"Accept": "text/event-stream"}
+
+        while True:
+            try:
+                with self._session.get(
+                    url,
+                    headers=headers,
+                    stream=True,
+                    verify=self._config.verify_tls,
+                    timeout=60,
+                ) as response:
+                    response.raise_for_status()
+                    data_lines: List[str] = []
+                    for raw_line in response.iter_lines(decode_unicode=True):
+                        if raw_line is None:
+                            continue
+                        line = raw_line.strip()
+                        if line == "":
+                            if not data_lines:
+                                continue
+                            payload_str = "\n".join(data_lines)
+                            data_lines = []
+                            if not payload_str:
+                                continue
+                            try:
+                                payload = json.loads(payload_str)
+                            except ValueError:
+                                continue
+                            yield payload
+                            continue
+                        if line.startswith(":"):
+                            continue
+                        if line.startswith("data:"):
+                            data_lines.append(line[5:].strip())
+                    # Connection closed, loop again to reconnect
+            except requests_exc.RequestException as exc:
+                raise HueBridgeError(
+                    f"Event-Stream konnte nicht aufgebaut werden: {exc}"
+                ) from exc
 
     def _handle_response(self, response: Response) -> _JSON:
         try:

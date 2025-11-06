@@ -69,6 +69,12 @@ def test_cli_list_lights_includes_relationships(monkeypatch, tmp_path, capsys):
         def get_zones(self):  # pragma: no cover - not used in this test
             return []
 
+        def get_buttons(self):  # pragma: no cover - not used in this test
+            return []
+
+        def get_motion_sensors(self):  # pragma: no cover - not used in this test
+            return []
+
     monkeypatch.setattr(cli, "HueBridgeClient", DummyClient)
 
     exit_code = cli.main([
@@ -123,6 +129,12 @@ def test_cli_list_scenes_includes_group(monkeypatch, tmp_path, capsys):
         def get_lights(self):  # pragma: no cover - not expected here
             raise AssertionError
 
+        def get_buttons(self):  # pragma: no cover - not used in this test
+            return []
+
+        def get_motion_sensors(self):  # pragma: no cover - not used in this test
+            return []
+
     monkeypatch.setattr(cli, "HueBridgeClient", DummyClient)
 
     exit_code = cli.main([
@@ -143,6 +155,116 @@ def test_cli_list_scenes_includes_group(monkeypatch, tmp_path, capsys):
         "rtype": "room",
         "name": "Wohnzimmer",
     }
+
+
+def test_cli_list_buttons_includes_device(monkeypatch, tmp_path, capsys):
+    config_path = write_config(tmp_path)
+
+    class DummyClient:
+        def __init__(self, config):
+            assert config.id == "bridge-1"
+
+        def get_buttons(self):
+            return [
+                HueResource(
+                    id="button-1",
+                    type="button",
+                    metadata={"name": "Taste"},
+                    data={"owner": {"rid": "device-1"}},
+                )
+            ]
+
+        def get_devices(self):
+            return [
+                HueResource(
+                    id="device-1",
+                    type="device",
+                    metadata={"name": "Schalter"},
+                    data={},
+                )
+            ]
+
+        def get_lights(self):  # pragma: no cover - not used in this test
+            return []
+
+        def get_rooms(self):  # pragma: no cover - not used in this test
+            return []
+
+        def get_scenes(self):  # pragma: no cover - not used in this test
+            return []
+
+        def get_zones(self):  # pragma: no cover - not used in this test
+            return []
+
+        def get_motion_sensors(self):  # pragma: no cover - not used in this test
+            return []
+
+    monkeypatch.setattr(cli, "HueBridgeClient", DummyClient)
+
+    exit_code = cli.main([
+        "--config",
+        str(config_path),
+        "list-resources",
+        "--type",
+        "buttons",
+        "--bridge-id",
+        "bridge-1",
+    ])
+
+    assert exit_code == 0
+    payload = json.loads(capsys.readouterr().out)
+    item = payload["items"][0]
+    assert item["device"] == {"name": "Schalter", "id": "device-1"}
+
+
+def test_cli_list_motions_reports_state(monkeypatch, tmp_path, capsys):
+    config_path = write_config(tmp_path)
+
+    class DummyClient:
+        def __init__(self, config):
+            assert config.id == "bridge-1"
+
+        def get_motion_sensors(self):
+            return [
+                HueResource(
+                    id="motion-1",
+                    type="motion",
+                    metadata={"name": "Bewegung"},
+                    data={"motion": {"motion_report": {"motion": True}}},
+                )
+            ]
+
+        def get_lights(self):  # pragma: no cover - not used in this test
+            return []
+
+        def get_rooms(self):  # pragma: no cover - not used in this test
+            return []
+
+        def get_scenes(self):  # pragma: no cover - not used in this test
+            return []
+
+        def get_zones(self):  # pragma: no cover - not used in this test
+            return []
+
+        def get_buttons(self):  # pragma: no cover - not used in this test
+            return []
+
+    monkeypatch.setattr(cli, "HueBridgeClient", DummyClient)
+
+    exit_code = cli.main([
+        "--config",
+        str(config_path),
+        "list-resources",
+        "--type",
+        "motions",
+        "--bridge-id",
+        "bridge-1",
+    ])
+
+    assert exit_code == 0
+    payload = json.loads(capsys.readouterr().out)
+    item = payload["items"][0]
+    assert item["state"] is True
 
 
 def test_cli_light_command(monkeypatch, tmp_path):

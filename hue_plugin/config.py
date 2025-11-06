@@ -47,10 +47,67 @@ class HueBridgeConfig:
 
 
 @dataclass
+class LoxoneSettings:
+    """Settings describing how the plugin reaches the Loxone Miniserver."""
+
+    base_url: Optional[str] = None
+    command_method: str = "POST"
+    event_method: str = "POST"
+
+    def to_dict(self) -> Dict[str, Any]:
+        payload: Dict[str, Any] = {
+            "command_method": self.command_method,
+            "event_method": self.event_method,
+        }
+        if self.base_url:
+            payload["base_url"] = self.base_url
+        return payload
+
+
+@dataclass
+class VirtualInputConfig:
+    """Mapping from Hue sensor events to Loxone virtual inputs."""
+
+    id: str
+    bridge_id: str
+    resource_id: str
+    resource_type: str
+    virtual_input: str
+    name: Optional[str] = None
+    trigger: Optional[str] = None
+    active_value: str = "1"
+    inactive_value: Optional[str] = None
+    reset_value: Optional[str] = None
+    reset_delay_ms: int = 250
+
+    def to_dict(self) -> Dict[str, Any]:
+        payload: Dict[str, Any] = {
+            "id": self.id,
+            "bridge_id": self.bridge_id,
+            "resource_id": self.resource_id,
+            "resource_type": self.resource_type,
+            "virtual_input": self.virtual_input,
+            "active_value": self.active_value,
+            "reset_delay_ms": self.reset_delay_ms,
+        }
+        if self.name:
+            payload["name"] = self.name
+        if self.trigger:
+            payload["trigger"] = self.trigger
+        if self.inactive_value is not None:
+            payload["inactive_value"] = self.inactive_value
+        if self.reset_value is not None:
+            payload["reset_value"] = self.reset_value
+        return payload
+
+
+@dataclass
 class PluginConfig:
     """Container for all Hue bridge configurations."""
 
     bridges: List[HueBridgeConfig] = field(default_factory=list)
+    loxone: LoxoneSettings = field(default_factory=LoxoneSettings)
+    virtual_inputs: List[VirtualInputConfig] = field(default_factory=list)
 
     @property
     def default_bridge(self) -> HueBridgeConfig:
@@ -68,7 +125,11 @@ class PluginConfig:
         raise ConfigError(f"Bridge mit der ID '{bridge_id}' wurde nicht gefunden.")
 
     def to_dict(self) -> Dict[str, Any]:
-        return {"bridges": [bridge.to_dict() for bridge in self.bridges]}
+        return {
+            "bridges": [bridge.to_dict() for bridge in self.bridges],
+            "loxone": self.loxone.to_dict(),
+            "virtual_inputs": [entry.to_dict() for entry in self.virtual_inputs],
+        }
 
 
 def load_config(path: str | Path | None = None) -> PluginConfig:
@@ -113,6 +174,30 @@ def ensure_bridge_id(name: Optional[str], *, existing_ids: Iterable[str]) -> str
     return f"{base}-{counter}"
 
 
+def ensure_virtual_input_id(
+    name: Optional[str],
+    *,
+    existing_ids: Iterable[str],
+    bridge_id: str,
+    resource_id: str,
+) -> str:
+    """Create a stable identifier for a virtual input mapping."""
+
+    base = _slugify(name)
+    if not base:
+        base = _slugify(f"{bridge_id}-{resource_id[:8]}")
+    if not base:
+        base = "input"
+
+    existing = set(existing_ids)
+    candidate = base
+    counter = 1
+    while candidate in existing:
+        candidate = f"{base}-{counter}"
+        counter += 1
+    return candidate
+
+
 def _parse_plugin_config(payload: Dict[str, Any]) -> PluginConfig:
     if "bridges" in payload and isinstance(payload["bridges"], list):
         bridges: List[HueBridgeConfig] = []
@@ -123,7 +208,9 @@ def _parse_plugin_config(payload: Dict[str, Any]) -> PluginConfig:
             bridges.append(bridge)
         if not bridges:
             raise ConfigError("Die Konfigurationsdatei enthält keine Hue-Bridges.")
-        return PluginConfig(bridges)
+        loxone = _parse_loxone_settings(payload.get("loxone", {}))
+        virtual_inputs = _parse_virtual_inputs(payload.get("virtual_inputs"), bridges)
+        return PluginConfig(bridges, loxone=loxone, virtual_inputs=virtual_inputs)
 
     # Legacy single-bridge structure
     try:
@@ -141,7 +228,9 @@ def _parse_plugin_config(payload: Dict[str, Any]) -> PluginConfig:
         use_https=payload.get("use_https", True),
         verify_tls=payload.get("verify_tls", False),
     )
-    return PluginConfig([bridge])
+    loxone = _parse_loxone_settings(payload.get("loxone", {}))
+    virtual_inputs = _parse_virtual_inputs(payload.get("virtual_inputs"), [bridge])
+    return PluginConfig([bridge], loxone=loxone, virtual_inputs=virtual_inputs)
 
 
 def _parse_bridge(
@@ -168,6 +257,97 @@ def _parse_bridge(
         use_https=entry.get("use_https", True),
         verify_tls=entry.get("verify_tls", False),
     )
+
+
+def _parse_loxone_settings(payload: Any) -> LoxoneSettings:
+    if not isinstance(payload, dict):
+        return LoxoneSettings()
+
+    base_url = payload.get("base_url")
+    if isinstance(base_url, str):
+        base_url = base_url.strip() or None
+    else:
+        base_url = None
+
+    def _normalize_method(value: Any, default: str) -> str:
+        if not isinstance(value, str):
+            return default
+        candidate = value.strip().upper()
+        return candidate if candidate in {"GET", "POST"} else default
+
+    command_method = _normalize_method(payload.get("command_method"), "POST")
+    event_method = _normalize_method(payload.get("event_method"), command_method)
+    return LoxoneSettings(
+        base_url=base_url,
+        command_method=command_method,
+        event_method=event_method,
+    )
+
+
+def _parse_virtual_inputs(
+    payload: Any,
+    bridges: Iterable[HueBridgeConfig],
+) -> List[VirtualInputConfig]:
+    if not isinstance(payload, list):
+        return []
+
+    bridge_ids = {bridge.id for bridge in bridges}
+    entries: List[VirtualInputConfig] = []
+    existing_ids: set[str] = set()
+
+    for index, item in enumerate(payload):
+        if not isinstance(item, dict):
+            continue
+        try:
+            bridge_id = item["bridge_id"]
+            resource_id = item["resource_id"]
+            resource_type = item["resource_type"]
+            virtual_input = item["virtual_input"]
+        except KeyError as exc:
+            raise ConfigError(
+                f"Virtual-Input-Eintrag {index + 1} ist unvollständig: fehlender Schlüssel '{exc.args[0]}'"
+            ) from exc
+
+        if bridge_id not in bridge_ids:
+            raise ConfigError(
+                f"Virtual-Input-Eintrag {index + 1} verweist auf unbekannte Bridge '{bridge_id}'."
+            )
+
+        identifier = item.get("id")
+        if not identifier:
+            identifier = ensure_virtual_input_id(
+                item.get("name"),
+                existing_ids=existing_ids,
+                bridge_id=bridge_id,
+                resource_id=str(resource_id),
+            )
+
+        mapping = VirtualInputConfig(
+            id=str(identifier),
+            bridge_id=str(bridge_id),
+            resource_id=str(resource_id),
+            resource_type=str(resource_type),
+            virtual_input=str(virtual_input),
+            name=item.get("name"),
+            trigger=item.get("trigger"),
+            active_value=str(item.get("active_value", "1")),
+            inactive_value=(
+                str(item["inactive_value"])
+                if item.get("inactive_value") is not None
+                else None
+            ),
+            reset_value=(
+                str(item["reset_value"])
+                if item.get("reset_value") is not None
+                else None
+            ),
+            reset_delay_ms=int(item.get("reset_delay_ms", 250) or 0),
+        )
+
+        existing_ids.add(mapping.id)
+        entries.append(mapping)
+
+    return entries
 
 
 def _load_json(path: Path) -> Dict[str, Any]:
@@ -200,9 +380,12 @@ def _slugify(value: Optional[str]) -> Optional[str]:
 
 __all__ = [
     "HueBridgeConfig",
+    "LoxoneSettings",
+    "VirtualInputConfig",
     "PluginConfig",
     "ConfigError",
     "load_config",
     "save_config",
     "ensure_bridge_id",
+    "ensure_virtual_input_id",
 ]

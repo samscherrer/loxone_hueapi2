@@ -133,7 +133,10 @@ erzeugt für jede Bridge direkt kopierbare URLs für virtuelle Ausgänge – sow
 Einschalten (Wert `1`) als auch zum Ausschalten (Wert `0`). Du kannst zusätzlich auswählen,
 ob die Befehle über den öffentlichen `/plugins/...`-Pfad (ohne Login) oder den geschützten
 `/admin/plugins/...`-Pfad laufen sollen. Optional lassen sich HTTP-Benutzername und Passwort
-für Basic Auth hinterlegen, die nur in den generierten URLs erscheinen.
+für Basic Auth hinterlegen, die nur in den generierten URLs erscheinen. Wichtig: Loxone
+soll die HTTP-Methode **POST** verwenden. Lege im Hauptelement deines virtuellen Ausgangs
+außerdem die komplette Basis-URL inklusive Zugangsdaten an (z. B.
+`http://loxberry:passwort@loxberry-host`).
 
 ### Vorgehen in Loxone (Virtueller Ausgang)
 
@@ -144,13 +147,16 @@ für Basic Auth hinterlegen, die nur in den generierten URLs erscheinen.
    einen Login verlangt, kannst du dort auch Benutzername und Passwort angeben – sie werden
    lediglich in die erzeugten URLs eingetragen.
 3. Erstelle unter dem virtuellen Ausgang in Loxone einen **virtuellen Ausgangsbefehl** und
-   trage als Kommando die URL aus dem Plugin ein. Verwende `GET` und aktiviere die Optionen
-   „Befehl bei EIN ausführen“ und „Befehl bei AUS ausführen“, falls du beide Fälle bedienen
-   möchtest.
-4. Kopiere die `light_id` bzw. `scene_id` direkt aus der Plugin-Oberfläche. Die Seite zeigt
+   trage als Kommando die URL aus dem Plugin ein. Verwende die Methode **POST** und aktiviere
+   die Optionen „Befehl bei EIN ausführen“ und „Befehl bei AUS ausführen“, falls du beide
+   Fälle bedienen möchtest.
+4. Hinterlege im Abschnitt „Loxone-Miniserver“ der Plugin-Oberfläche die Basis-URL deines
+   Miniservers (inklusive `http://benutzer:passwort@...`). Diese Angaben nutzt das Plugin,
+   um Hue-Sensorereignisse als virtuelle Eingänge an Loxone weiterzuleiten.
+5. Kopiere die `light_id` bzw. `scene_id` direkt aus der Plugin-Oberfläche. Die Seite zeigt
    unter „Licht steuern“ und „Szene aktivieren“ automatisch die passenden URLs für EIN (`1`)
    und AUS (`0`) an.
-5. Wiederhole die Schritte für weitere Lampen oder Szenen. Durch die Bridge-Auswahl kannst du
+6. Wiederhole die Schritte für weitere Lampen oder Szenen. Durch die Bridge-Auswahl kannst du
    unterschiedliche Hue Bridges getrennt verwalten.
 
 ### Szenen oder Lampen per HTTP-Request auslösen
@@ -192,9 +198,19 @@ Der Parameter `on` akzeptiert `1` (EIN) oder `0` (AUS); `brightness` (0–100) i
 wird nur für das Einschalten berücksichtigt. Alternativ kannst du den Python-REST-Dienst weiter-
 verwenden, wenn du lieber auf Port `5510` mit JSON arbeitest.
 
-> Tipp: In Loxone kannst du dieselbe URL auch in einem virtuellen Eingang verwenden, um
-> beispielsweise den Status eines Tasters zum Schalten einer Szene zu nutzen. Wichtig ist nur,
-> dass der Miniserver die vollständige URL mitsamt Parametern absetzt.
+### Hue-Sensoren auf virtuelle Eingänge abbilden
+
+Die Weboberfläche enthält den Abschnitt **„Hue → Loxone Eingänge“**, in dem du Hue-Schalter,
+Dimmer oder Bewegungsmelder mit virtuellen Eingängen im Miniserver verknüpfst. Hinterlege dafür
+die entsprechende Bridge, die Ressourcen-ID (z. B. aus der Ressourcenliste „Buttons“ oder
+„Bewegungsmelder“) sowie den virtuellen Eingang, den Loxone schalten soll. Für Taster kannst du
+einen Reset-Wert definieren, der nach einer kurzen Verzögerung gesendet wird – so entsteht ein
+kurzer Impuls (`1` → `0`). Bewegungsmelder lösen den aktiven und optional den inaktiven Wert aus.
+
+Sobald ein Eintrag gespeichert ist, lauscht das Plugin auf den Hue-Eventstream und sendet die
+konfigurierten Werte automatisch an den angegebenen Miniserver (über die zuvor hinterlegte
+Basis-URL). Damit kannst du Hue-Schalter oder Bewegungsmelder in Loxone-Logiken verwenden, ohne
+dass zusätzliche Skripte nötig sind.
 
 ## Tests
 
