@@ -806,6 +806,33 @@ function handle_ajax(string $configPath): void
                 respond_json(['ok' => true]);
                 break;
 
+            case 'test_virtual_input':
+                $payload = request_payload();
+                $identifier = extract_query_param((string) ($payload['id'] ?? ''), 'id');
+                if ($identifier === '') {
+                    throw new RuntimeException('ID des virtuellen Eingangs fehlt.');
+                }
+                $state = strtolower(trim((string) ($payload['state'] ?? 'active')));
+                if ($state === '') {
+                    $state = 'active';
+                }
+                $allowedStates = ['active', 'inactive', 'reset', 'custom'];
+                if (!in_array($state, $allowedStates, true)) {
+                    throw new RuntimeException('Unbekannter Testzustand.');
+                }
+                $args = ['forward-virtual-input', '--virtual-input-id', $identifier, '--state', $state];
+                if ($state === 'custom') {
+                    $value = trim((string) ($payload['value'] ?? ''));
+                    if ($value === '') {
+                        throw new RuntimeException('Bitte einen Wert für den Testaufruf angeben.');
+                    }
+                    $args[] = '--value';
+                    $args[] = $value;
+                }
+                call_hue_cli($args);
+                respond_json(['ok' => true]);
+                break;
+
             case 'test_connection':
                 $bridgeId = extract_query_param((string) ($_GET['bridge_id'] ?? ''), 'bridge_id');
                 if ($bridgeId === '') {
@@ -2017,6 +2044,35 @@ header('Content-Type: text/html; charset=utf-8');
 
           const actions = document.createElement('div');
           actions.className = 'bridge-actions';
+
+          const testActiveButton = document.createElement('button');
+          testActiveButton.type = 'button';
+          testActiveButton.className = 'secondary';
+          testActiveButton.textContent = 'Test aktiv';
+          testActiveButton.dataset.action = 'test-virtual-input-active';
+          testActiveButton.dataset.id = entry.id;
+          actions.appendChild(testActiveButton);
+
+          if (entry.inactive_value) {
+            const testInactiveButton = document.createElement('button');
+            testInactiveButton.type = 'button';
+            testInactiveButton.className = 'secondary';
+            testInactiveButton.textContent = 'Test inaktiv';
+            testInactiveButton.dataset.action = 'test-virtual-input-inactive';
+            testInactiveButton.dataset.id = entry.id;
+            actions.appendChild(testInactiveButton);
+          }
+
+          if (entry.reset_value) {
+            const testResetButton = document.createElement('button');
+            testResetButton.type = 'button';
+            testResetButton.className = 'secondary';
+            testResetButton.textContent = 'Test Reset';
+            testResetButton.dataset.action = 'test-virtual-input-reset';
+            testResetButton.dataset.id = entry.id;
+            actions.appendChild(testResetButton);
+          }
+
           const editButton = document.createElement('button');
           editButton.type = 'button';
           editButton.className = 'secondary';
@@ -2468,6 +2524,32 @@ header('Content-Type: text/html; charset=utf-8');
               message(virtualInputMessage, 'success', 'Eingang gelöscht.');
               renderVirtualInputList();
               renderVirtualInputForm();
+            } catch (error) {
+              message(virtualInputMessage, 'error', error.message);
+            }
+          } else if (
+            action === 'test-virtual-input-active' ||
+            action === 'test-virtual-input-inactive' ||
+            action === 'test-virtual-input-reset'
+          ) {
+            const stateValue =
+              action === 'test-virtual-input-inactive'
+                ? 'inactive'
+                : action === 'test-virtual-input-reset'
+                ? 'reset'
+                : 'active';
+            try {
+              await apiFetch('test_virtual_input', {
+                method: 'POST',
+                body: { id, state: stateValue },
+              });
+              const label =
+                stateValue === 'inactive'
+                  ? 'Inaktiv'
+                  : stateValue === 'reset'
+                  ? 'Reset'
+                  : 'Aktiv';
+              message(virtualInputMessage, 'success', `Test (${label}) ausgelöst.`);
             } catch (error) {
               message(virtualInputMessage, 'error', error.message);
             }

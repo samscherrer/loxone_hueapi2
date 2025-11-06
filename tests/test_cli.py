@@ -230,7 +230,13 @@ def test_cli_list_motions_reports_state(monkeypatch, tmp_path, capsys):
                     id="motion-1",
                     type="motion",
                     metadata={"name": "Bewegung"},
-                    data={"motion": {"motion_report": {"motion": True}}},
+                    data={
+                        "motion": {
+                            "motion_report": {
+                                "motion": {"motion": True, "motion_valid": True}
+                            }
+                        }
+                    },
                 )
             ]
 
@@ -363,3 +369,79 @@ def test_cli_test_connection_failure(monkeypatch, tmp_path):
         cli.command_test_connection(Namespace(config=str(config_path), bridge_id="bridge-1"))
 
     assert "boom" in str(exc.value)
+
+
+def _write_virtual_input_config(path, *, include_inactive=True):
+    data = json.loads(path.read_text())
+    data["loxone"] = {
+        "base_url": "http://loxone",  # pragma: no cover - structure only
+        "command_method": "POST",
+        "event_method": "POST",
+        "command_scope": "public",
+    }
+    entry = {
+        "id": "motion-input",
+        "bridge_id": "bridge-1",
+        "resource_id": "motion-1",
+        "resource_type": "motion",
+        "virtual_input": "VI.Motion",
+        "active_value": "1",
+    }
+    if include_inactive:
+        entry["inactive_value"] = "0"
+    data["virtual_inputs"] = [entry]
+    path.write_text(json.dumps(data))
+
+
+def test_cli_forward_virtual_input_active(monkeypatch, tmp_path):
+    config_path = write_config(tmp_path)
+    _write_virtual_input_config(config_path)
+
+    calls = []
+
+    class DummySender:
+        def __init__(self, settings):
+            assert settings.base_url == "http://loxone"
+
+        def send(self, virtual_input, value):
+            calls.append((virtual_input, value))
+
+    monkeypatch.setattr(cli, "LoxoneSender", lambda settings: DummySender(settings))
+
+    args = Namespace(
+        config=str(config_path),
+        virtual_input_id="motion-input",
+        state="active",
+        value=None,
+    )
+
+    result = cli.command_forward_virtual_input(args)
+
+    assert result == {"ok": True}
+    assert calls == [("VI.Motion", "1")]
+
+
+def test_cli_forward_virtual_input_inactive_missing(monkeypatch, tmp_path):
+    config_path = write_config(tmp_path)
+    _write_virtual_input_config(config_path, include_inactive=False)
+
+    class DummySender:
+        def __init__(self, settings):
+            pass
+
+        def send(self, virtual_input, value):  # pragma: no cover - should not be called
+            raise AssertionError("send should not be invoked")
+
+    monkeypatch.setattr(cli, "LoxoneSender", lambda settings: DummySender(settings))
+
+    args = Namespace(
+        config=str(config_path),
+        virtual_input_id="motion-input",
+        state="inactive",
+        value=None,
+    )
+
+    with pytest.raises(SystemExit) as exc:
+        cli.command_forward_virtual_input(args)
+
+    assert "kein Inaktiv-Wert" in str(exc.value)

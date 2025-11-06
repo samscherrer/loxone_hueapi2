@@ -226,7 +226,13 @@ Impuls erhält.
 Sobald ein Eintrag gespeichert ist, lauscht das Plugin auf den Hue-Eventstream und sendet die
 konfigurierten Werte automatisch an den angegebenen Miniserver (über die zuvor hinterlegte
 Basis-URL). Damit kannst du Hue-Schalter oder Bewegungsmelder in Loxone-Logiken verwenden, ohne
-dass zusätzliche Skripte nötig sind.
+dass zusätzliche Skripte nötig sind. Über die Schaltflächen **„Test aktiv“**, **„Test inaktiv“**
+und – falls vorhanden – **„Test Reset“** im Abschnitt „Hue → Loxone Eingänge“ kannst du jederzeit
+manuell einen Impuls an den virtuellen Eingang senden. So prüfst du die Anbindung zu Loxone,
+ohne auf einen echten Tastendruck oder eine Bewegung warten zu müssen. Wichtig: Der Hue-
+Bewegungsmelder muss in der Hue-App einem Raum bzw. einer Zone zugewiesen und aktiviert sein,
+damit er Ereignisse an die Bridge übermittelt; zusätzliche Einstellungen im Plugin sind nicht
+erforderlich.
 
 ## Tests
 

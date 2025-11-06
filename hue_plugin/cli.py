@@ -8,6 +8,7 @@ from collections import defaultdict
 from typing import Any, Dict, Iterable, List
 
 from .config import ConfigError, HueBridgeConfig, PluginConfig, load_config
+from .event_forwarder import LoxoneSender, extract_motion_state
 from .hue_client import HueBridgeClient, HueBridgeError, HueResource
 
 
@@ -155,11 +156,9 @@ def command_list_resources(args: argparse.Namespace) -> Dict[str, Any]:
 
     if args.type == "motions":
         for resource, item in zip(resources, items):
-            motion = resource.data.get("motion")
-            if isinstance(motion, dict):
-                report = motion.get("motion_report")
-                if isinstance(report, dict):
-                    item["state"] = report.get("motion")
+            state = extract_motion_state(resource.data)
+            if state is not None:
+                item["state"] = state
 
     return {"items": items}
 
@@ -214,6 +213,42 @@ _COMMANDS = {
 }
 
 
+def command_forward_virtual_input(args: argparse.Namespace) -> Dict[str, Any]:
+    config = _plugin_config(args.config)
+    try:
+        mapping = next(entry for entry in config.virtual_inputs if entry.id == args.virtual_input_id)
+    except StopIteration as exc:  # pragma: no cover - propagated as exit code
+        raise SystemExit(f"Virtueller Eingang '{args.virtual_input_id}' wurde nicht gefunden.") from exc
+
+    sender = LoxoneSender(config.loxone)
+
+    if args.state == "custom":
+        if args.value is None:
+            raise SystemExit("Bitte einen Wert für den Testaufruf angeben.")
+        value = args.value
+    elif args.state == "inactive":
+        if mapping.inactive_value is None:
+            raise SystemExit("Für diesen Eingang ist kein Inaktiv-Wert hinterlegt.")
+        value = mapping.inactive_value
+    elif args.state == "reset":
+        candidate = mapping.reset_value if mapping.reset_value is not None else mapping.inactive_value
+        if candidate is None:
+            raise SystemExit("Für diesen Eingang ist kein Reset-/Inaktiv-Wert hinterlegt.")
+        value = candidate
+    else:
+        value = mapping.active_value
+
+    try:
+        sender.send(mapping.virtual_input, value)
+    except RuntimeError as exc:  # pragma: no cover - propagated as exit code
+        raise SystemExit(str(exc)) from exc
+
+    return {"ok": True}
+
+
+_COMMANDS["forward-virtual-input"] = command_forward_virtual_input
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Hue bridge helper commands")
     parser.add_argument(
@@ -259,6 +294,18 @@ def build_parser() -> argparse.ArgumentParser:
     scene_state.add_argument("--on", dest="state", action="store_const", const=True)
     scene_state.add_argument("--off", dest="state", action="store_const", const=False)
     parser_scene.set_defaults(state=None)
+
+    parser_virtual = subparsers.add_parser(
+        "forward-virtual-input", help="Virtuellen Loxone-Eingang testen"
+    )
+    parser_virtual.add_argument("--virtual-input-id", dest="virtual_input_id", required=True)
+    parser_virtual.add_argument(
+        "--state",
+        dest="state",
+        choices=["active", "inactive", "reset", "custom"],
+        default="active",
+    )
+    parser_virtual.add_argument("--value", dest="value", default=None)
 
     return parser
 

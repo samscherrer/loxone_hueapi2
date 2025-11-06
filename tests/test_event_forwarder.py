@@ -1,7 +1,7 @@
 import pytest
 
 from hue_plugin.config import LoxoneSettings
-from hue_plugin.event_forwarder import LoxoneSender
+from hue_plugin.event_forwarder import LoxoneSender, extract_motion_state
 
 
 def test_sender_requires_base_url():
@@ -46,3 +46,29 @@ def test_sender_get(monkeypatch):
     sender.send("Sensor", "0")
 
     assert calls == ["http://host/dev/sps/io/Sensor/0"]
+
+
+@pytest.mark.parametrize(
+    "payload,expected",
+    [
+        ({"motion": {"motion_report": {"motion": True}}}, True),
+        (
+            {
+                "motion": {
+                    "motion_report": {
+                        "motion": {"motion": "true", "motion_valid": True}
+                    }
+                }
+            },
+            True,
+        ),
+        (
+            {"motion": {"motion_report": {"motion": {"value": 0}}}},
+            False,
+        ),
+        ({"motion": {"motion": "inactive"}}, False),
+        ({"not_motion": {}}, None),
+    ],
+)
+def test_extract_motion_state(payload, expected):
+    assert extract_motion_state(payload) is expected

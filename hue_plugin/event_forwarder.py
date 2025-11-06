@@ -3,7 +3,7 @@ from __future__ import annotations
 import threading
 import time
 from collections import defaultdict
-from typing import Callable, Dict, Iterable, Iterator, List, Optional, Tuple
+from typing import Any, Callable, Dict, Iterable, Iterator, List, Optional, Tuple
 from urllib.parse import quote
 
 import requests
@@ -22,6 +22,53 @@ from .hue_client import HueBridgeClient, HueBridgeError
 
 def _log(message: str) -> None:
     print(f"[hue-event-forwarder] {message}", flush=True)
+
+
+def _coerce_motion_state(value: Any) -> Optional[bool]:
+    """Best-effort conversion of Hue motion payload values to booleans."""
+
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        if value == 0:
+            return False
+        if value == 1:
+            return True
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered in {"true", "on", "1", "yes", "detected", "motion", "active"}:
+            return True
+        if lowered in {"false", "off", "0", "no", "clear", "inactive"}:
+            return False
+    if isinstance(value, dict):
+        # Hue adds additional metadata levels depending on firmware version.
+        for key in ("motion", "value", "status"):
+            if key in value:
+                coerced = _coerce_motion_state(value[key])
+                if coerced is not None:
+                    return coerced
+        for candidate in value.values():
+            coerced = _coerce_motion_state(candidate)
+            if coerced is not None:
+                return coerced
+    return None
+
+
+def extract_motion_state(entry: Dict[str, Any]) -> Optional[bool]:
+    """Return the current motion state from an event payload."""
+
+    motion = entry.get("motion")
+    if not isinstance(motion, dict):
+        return None
+    report = motion.get("motion_report")
+    if isinstance(report, dict):
+        state = report.get("motion")
+        coerced = _coerce_motion_state(state)
+        if coerced is not None:
+            return coerced
+    # Some firmware revisions report the value directly on the resource.
+    state = motion.get("motion")
+    return _coerce_motion_state(state)
 
 
 class LoxoneSender:
@@ -220,13 +267,7 @@ class BridgeWorker(threading.Thread):
         mapping: VirtualInputConfig,
         sender: LoxoneSender,
     ) -> None:
-        motion = entry.get("motion")
-        if not isinstance(motion, dict):
-            return
-        report = motion.get("motion_report")
-        if not isinstance(report, dict):
-            return
-        state = report.get("motion")
+        state = extract_motion_state(entry)
         if state is True:
             sender.send(mapping.virtual_input, mapping.active_value)
         elif state is False and mapping.inactive_value is not None:
