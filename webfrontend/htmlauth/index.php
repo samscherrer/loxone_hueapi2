@@ -23,12 +23,37 @@ function respond_error(string $message, int $status = 400): void
 
 function plugin_config_path(): string
 {
+    $pluginId = 'hueapiv2';
+    $placeholderConfig = 'REPLACELBPCONFIGDIR';
     $configDir = getenv('LBPCONFIGDIR');
-    if (!$configDir) {
-        $configDir = dirname(__DIR__, 2) . '/config';
+
+    if ($configDir !== false && $configDir !== '' && $configDir !== $placeholderConfig) {
+        return rtrim($configDir, DIRECTORY_SEPARATOR) . '/config.json';
     }
 
-    return rtrim($configDir, DIRECTORY_SEPARATOR) . '/config.json';
+    $lbHomeDir = getenv('LBHOMEDIR');
+    $placeholderHome = 'REPLACELBHOMEDIR';
+    if ($lbHomeDir !== false && $lbHomeDir !== '' && $lbHomeDir !== $placeholderHome) {
+        $candidate = rtrim($lbHomeDir, DIRECTORY_SEPARATOR) . '/config/plugins/' . $pluginId . '/config.json';
+        if (file_exists($candidate) || is_dir(dirname($candidate))) {
+            return $candidate;
+        }
+    }
+
+    $root = plugin_root();
+    $candidates = [
+        '/opt/loxberry/config/plugins/' . $pluginId . '/config.json',
+        $root . '/config/config.json',
+        dirname(__DIR__, 2) . '/config/config.json',
+    ];
+
+    foreach ($candidates as $candidate) {
+        if (file_exists($candidate) || is_dir(dirname($candidate))) {
+            return $candidate;
+        }
+    }
+
+    return $root . '/config/config.json';
 }
 
 function load_plugin_config(string $configPath): array
@@ -348,10 +373,16 @@ function plugin_root(): string
         $candidates[] = $lbHomeDir . '/bin/plugins/' . $pluginId;
     }
 
+    $lbpDataDir = getenv('LBPDATADIR');
+    $placeholderData = 'REPLACELBPDATADIR';
+    if ($lbpDataDir !== false && $lbpDataDir !== '' && $lbpDataDir !== $placeholderData) {
+        $candidates[] = $lbpDataDir;
+    }
+
     $candidates[] = '/opt/loxberry/data/plugins/' . $pluginId;
     $candidates[] = '/opt/loxberry/bin/plugins/' . $pluginId;
-    $candidates[] = dirname(__DIR__, 3);
     $candidates[] = dirname(__DIR__, 2);
+    $candidates[] = dirname(__DIR__, 3);
 
     foreach ($candidates as $candidate) {
         if ($candidate && is_dir($candidate)) {
