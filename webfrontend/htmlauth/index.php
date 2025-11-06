@@ -1499,8 +1499,8 @@ header('Content-Type: text/html; charset=utf-8');
               <input type="text" id="virtual-input-rid" placeholder="UUID aus Hue" />
             </div>
           </div>
-          <div class="grid two" data-role="trigger-field">
-            <div>
+          <div class="grid two">
+            <div data-role="trigger-field">
               <label for="virtual-input-trigger">Trigger / Aktion</label>
               <input
                 type="text"
@@ -1519,6 +1519,10 @@ header('Content-Type: text/html; charset=utf-8');
                 id="virtual-input-target"
                 placeholder="Name des virtuellen Eingangs in Loxone"
               />
+              <p class="form-note">
+                Bewegungsmelder verwenden denselben Eingang für Aktiv- und Inaktiv-Werte. Lege
+                unten fest, welcher Wert bei keiner Bewegung gesendet werden soll.
+              </p>
             </div>
           </div>
           <div class="grid two">
@@ -1814,13 +1818,40 @@ header('Content-Type: text/html; charset=utf-8');
           return;
         }
         const type = virtualInputTypeSelect.value;
+        const isButton = type === 'button';
         const triggerField = virtualInputForm.querySelector('[data-role="trigger-field"]');
         const resetField = virtualInputForm.querySelector('[data-role="reset-field"]');
+
         if (triggerField) {
-          triggerField.style.display = type === 'button' ? '' : 'none';
+          triggerField.style.display = isButton ? '' : 'none';
         }
+        if (virtualInputTriggerInput) {
+          virtualInputTriggerInput.disabled = !isButton;
+          if (!isButton) {
+            virtualInputTriggerInput.value = '';
+          }
+        }
+
         if (resetField) {
-          resetField.style.display = type === 'button' ? '' : 'none';
+          resetField.style.display = isButton ? '' : 'none';
+        }
+        if (virtualInputResetInput) {
+          virtualInputResetInput.disabled = !isButton;
+          if (!isButton) {
+            virtualInputResetInput.value = '';
+          }
+        }
+        if (virtualInputDelayInput) {
+          virtualInputDelayInput.disabled = !isButton;
+          if (!isButton) {
+            virtualInputDelayInput.value = '0';
+          } else if (virtualInputDelayInput.value === '' || Number(virtualInputDelayInput.value) < 0) {
+            virtualInputDelayInput.value = '250';
+          }
+        }
+
+        if (virtualInputInactiveInput && type === 'motion' && virtualInputInactiveInput.value.trim() === '') {
+          virtualInputInactiveInput.value = '0';
         }
       };
 

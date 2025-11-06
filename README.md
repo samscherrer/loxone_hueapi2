@@ -218,7 +218,10 @@ Dimmer oder Bewegungsmelder mit virtuellen Eingängen im Miniserver verknüpfst.
 die entsprechende Bridge, die Ressourcen-ID (z. B. aus der Ressourcenliste „Buttons“ oder
 „Bewegungsmelder“) sowie den virtuellen Eingang, den Loxone schalten soll. Für Taster kannst du
 einen Reset-Wert definieren, der nach einer kurzen Verzögerung gesendet wird – so entsteht ein
-kurzer Impuls (`1` → `0`). Bewegungsmelder lösen den aktiven und optional den inaktiven Wert aus.
+kurzer Impuls (`1` → `0`). Beim Typ „Bewegungsmelder“ bleibt das Feld für den virtuellen Eingang
+sichtbar, damit du die Zieladresse weiterhin setzen kannst; trage zusätzlich einen Inaktiv-Wert
+(z. B. `0`) ein, damit der Miniserver bei ausbleibender Bewegung zuverlässig einen zweiten
+Impuls erhält.
 
 Sobald ein Eintrag gespeichert ist, lauscht das Plugin auf den Hue-Eventstream und sendet die
 konfigurierten Werte automatisch an den angegebenen Miniserver (über die zuvor hinterlegte
