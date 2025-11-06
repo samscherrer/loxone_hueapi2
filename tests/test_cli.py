@@ -1,4 +1,5 @@
 import json
+import json
 from argparse import Namespace
 
 import pytest
@@ -445,3 +446,50 @@ def test_cli_forward_virtual_input_inactive_missing(monkeypatch, tmp_path):
         cli.command_forward_virtual_input(args)
 
     assert "kein Inaktiv-Wert" in str(exc.value)
+
+
+def test_cli_virtual_input_events(tmp_path, capsys):
+    config_path = write_config(tmp_path)
+    state_file = config_path.parent / "runtime_state.json"
+    payload = {
+        "events": [
+            {
+                "event_id": 1,
+                "timestamp": "2023-01-01T00:00:00Z",
+                "mapping_id": "vi-1",
+                "state": "active",
+                "value": "1",
+            },
+            {
+                "event_id": 2,
+                "timestamp": "2023-01-01T00:01:00Z",
+                "mapping_id": "vi-1",
+                "state": "inactive",
+                "value": "0",
+            },
+        ],
+        "states": {
+            "vi-1": {
+                "state": "inactive",
+                "timestamp": "2023-01-01T00:01:00Z",
+                "value": "0",
+            }
+        },
+    }
+    state_file.write_text(json.dumps(payload))
+
+    exit_code = cli.main(
+        [
+            "--config",
+            str(config_path),
+            "virtual-input-events",
+            "--limit",
+            "1",
+        ]
+    )
+
+    assert exit_code == 0
+    output = json.loads(capsys.readouterr().out)
+    assert output["states"]["vi-1"]["state"] == "inactive"
+    assert len(output["events"]) == 1
+    assert output["events"][0]["state"] == "inactive"

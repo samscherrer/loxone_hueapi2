@@ -17,6 +17,8 @@ einen kleinen REST-Server lassen sich Lampen, Szenen und Räume abfragen sowie A
 * Speichern des bevorzugten Loxone-Pfads (öffentlich/Admin) sowie optionaler Zugangsdaten für
   virtuelle Ausgänge direkt in der Oberfläche.
 * Konfigurationsdatei und Umgebungsvariable zur einfachen Anpassung auf dem LoxBerry.
+* Live-Statusübersicht der konfigurierten Hue→Loxone-Eingänge inklusive Ereignisprotokoll und
+  manuellen Testaufrufen für Buttons oder Bewegungsmelder.
 
 ## Vorbereitung
 
@@ -86,6 +88,9 @@ grafische Oberfläche ausliefert. Dort kannst du
 * sowie einzelne Lampen oder Szenen zum Testen schalten.
 * Pfad und optionale Zugangsdaten für Loxone-Ausgänge speichern, um fertige HTTP-Kommandos
   schneller zu übernehmen.
+* Im Abschnitt **„Live-Status & Ereignisse“** sehen, wann Hue-Schalter oder Bewegungsmelder zuletzt
+  ausgelöst haben – inklusive einer kompakten Ereignisliste und einem Button zum manuellen
+  Aktualisieren.
 
 Die Oberfläche lädt die Bridge-Liste automatisch und kommuniziert über einen
 PHP-Proxy mit dem lokalen REST-Dienst. Damit entfällt die manuelle Eingabe einer
@@ -97,6 +102,16 @@ Szenen, Räume, Schalter und Bewegungsmelder bereit. So kannst du die jeweiligen
 Resource-IDs (RID) schnell ablesen oder dir per „JSON anzeigen“ die vollständigen
 Hue-Daten anzeigen lassen – ideal, um Schalter oder Bewegungsmelder mit virtuellen
 Eingängen in Loxone zu verknüpfen.
+
+Direkt darunter findest du den Live-Status deiner virtuellen Eingänge. Die Tabelle
+„Aktuelle Zustände“ listet jeden hinterlegten Button oder Bewegungsmelder mitsamt dem
+zuletzt gesendeten Wert und Zeitstempel. Das Ereignisprotokoll zeigt die neuesten
+Hue-Meldungen (inklusive Hinweis, ob der Wert an Loxone weitergereicht wurde). Über
+die Schaltfläche **„Status aktualisieren“** kannst du die Anzeige jederzeit manuell
+neu laden; parallel aktualisiert sich die Übersicht automatisch alle zehn Sekunden.
+Die bekannten Test-Buttons („Test aktiv“, „Test inaktiv“, „Test Reset“) lösen dabei
+sofort den entsprechenden virtuellen Eingang in Loxone aus – hilfreich zum
+Durchspielen, selbst wenn der reale Hue-Sensor gerade nichts meldet.
 
 ### TLS-Zertifikate der Hue Bridge
 

@@ -402,6 +402,14 @@ def _resolve_config_path(path: str | Path | None) -> Path:
     return _DEFAULT_CONFIG_PATH
 
 
+def runtime_state_path(path: str | Path | None = None) -> Path:
+    """Return the path used to persist transient runtime state."""
+
+    resolved = _resolve_config_path(path)
+    parent = resolved.parent
+    return parent / "runtime_state.json"
+
+
 def _slugify(value: Optional[str]) -> Optional[str]:
     if not value:
         return None
@@ -419,4 +427,5 @@ __all__ = [
     "save_config",
     "ensure_bridge_id",
     "ensure_virtual_input_id",
+    "runtime_state_path",
 ]

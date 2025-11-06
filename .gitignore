@@ -7,3 +7,4 @@ pytest_cache/
 dist/
 releases/
 *.zip
+config/runtime_state.json

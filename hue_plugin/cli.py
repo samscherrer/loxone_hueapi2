@@ -7,8 +7,14 @@ import sys
 from collections import defaultdict
 from typing import Any, Dict, Iterable, List
 
-from .config import ConfigError, HueBridgeConfig, PluginConfig, load_config
-from .event_forwarder import LoxoneSender, extract_motion_state
+from .config import (
+    ConfigError,
+    HueBridgeConfig,
+    PluginConfig,
+    load_config,
+    runtime_state_path,
+)
+from .event_forwarder import LoxoneSender, extract_motion_state, load_event_state
 from .hue_client import HueBridgeClient, HueBridgeError, HueResource
 
 
@@ -163,6 +169,24 @@ def command_list_resources(args: argparse.Namespace) -> Dict[str, Any]:
     return {"items": items}
 
 
+def command_virtual_input_events(args: argparse.Namespace) -> Dict[str, Any]:
+    state_path = runtime_state_path(args.config)
+    data = load_event_state(state_path)
+    events = data.get("events")
+    states = data.get("states")
+
+    if not isinstance(events, list):
+        events = []
+    if not isinstance(states, dict):
+        states = {}
+
+    limit = getattr(args, "limit", None)
+    if isinstance(limit, int) and limit > 0:
+        events = events[-limit:]
+
+    return {"events": events, "states": states}
+
+
 def command_light_command(args: argparse.Namespace) -> Dict[str, Any]:
     config = _plugin_config(args.config)
     bridge = _bridge_config(config, args.bridge_id)
@@ -208,6 +232,7 @@ def command_scene_command(args: argparse.Namespace) -> Dict[str, Any]:
 _COMMANDS = {
     "test-connection": command_test_connection,
     "list-resources": command_list_resources,
+    "virtual-input-events": command_virtual_input_events,
     "light-command": command_light_command,
     "scene-command": command_scene_command,
 }
@@ -269,6 +294,18 @@ def build_parser() -> argparse.ArgumentParser:
         dest="type",
         choices=["lights", "scenes", "rooms", "buttons", "motions"],
         required=True,
+    )
+
+    parser_events = subparsers.add_parser(
+        "virtual-input-events",
+        help="Letzte Hue-Ereignisse und virtuelle Eingänge anzeigen",
+    )
+    parser_events.add_argument(
+        "--limit",
+        dest="limit",
+        type=int,
+        default=None,
+        help="Optional: Anzahl der zurückgegebenen Ereignisse begrenzen",
     )
 
     parser_light = subparsers.add_parser("light-command", help="Lampenzustand setzen")

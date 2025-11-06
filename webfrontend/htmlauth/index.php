@@ -856,6 +856,22 @@ function handle_ajax(string $configPath): void
                 respond_json(['items' => $items]);
                 break;
 
+            case 'virtual_input_events':
+                $limitRaw = trim((string) ($_GET['limit'] ?? ''));
+                $args = ['virtual-input-events'];
+                if ($limitRaw !== '' && preg_match('/^-?\d+$/', $limitRaw)) {
+                    $limit = (int) $limitRaw;
+                    if ($limit > 0) {
+                        $args[] = '--limit';
+                        $args[] = (string) $limit;
+                    }
+                }
+                $result = call_hue_cli($args);
+                $events = isset($result['events']) && is_array($result['events']) ? $result['events'] : [];
+                $states = isset($result['states']) && is_array($result['states']) ? $result['states'] : [];
+                respond_json(['events' => $events, 'states' => $states]);
+                break;
+
             case 'light_command':
                 $payload = request_payload();
                 $bridgeId = extract_query_param((string) ($payload['bridge_id'] ?? ''), 'bridge_id');
@@ -1030,6 +1046,12 @@ header('Content-Type: text/html; charset=utf-8');
         margin-top: 0;
         font-size: 1.5rem;
         color: var(--accent);
+      }
+
+      h3 {
+        margin: 1.4rem 0 0.6rem;
+        font-size: 1.1rem;
+        color: var(--accent-dark);
       }
 
       .muted {
@@ -1586,6 +1608,52 @@ header('Content-Type: text/html; charset=utf-8');
       </section>
 
       <section class="card">
+        <h2>Live-Status & Ereignisse</h2>
+        <p class="muted">
+          Beobachte den zuletzt bekannten Zustand deiner virtuellen Eingänge und die letzten
+          Ereignisse, die aus der Hue-Bridge weitergeleitet wurden. Über „Status aktualisieren“
+          kannst du die Anzeige jederzeit manuell neu laden.
+        </p>
+        <div class="actions">
+          <button type="button" id="refresh-virtual-events" class="secondary">
+            Status aktualisieren
+          </button>
+        </div>
+        <div id="virtual-events-message" class="message"></div>
+        <h3>Aktuelle Zustände</h3>
+        <table id="virtual-status-table">
+          <thead>
+            <tr>
+              <th>Eingang</th>
+              <th>Status</th>
+              <th>Zuletzt</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td colspan="3" class="muted">Noch keine Eingänge oder Ereignisse vorhanden.</td>
+            </tr>
+          </tbody>
+        </table>
+        <h3>Ereignisprotokoll</h3>
+        <table id="virtual-events-table">
+          <thead>
+            <tr>
+              <th>Zeit</th>
+              <th>Eingang</th>
+              <th>Aktion</th>
+              <th>Details</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td colspan="4" class="muted">Noch keine Ereignisse aufgezeichnet.</td>
+            </tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section class="card">
         <h2>Licht steuern</h2>
         <div class="grid two">
           <div>
@@ -1707,6 +1775,10 @@ header('Content-Type: text/html; charset=utf-8');
       const virtualInputDelayInput = document.getElementById('virtual-input-delay');
       const virtualInputResetButton = document.getElementById('virtual-input-reset-form');
       const virtualInputDeleteButton = document.getElementById('virtual-input-delete');
+      const refreshVirtualEventsButton = document.getElementById('refresh-virtual-events');
+      const virtualEventsMessage = document.getElementById('virtual-events-message');
+      const virtualStatusTable = document.getElementById('virtual-status-table');
+      const virtualEventsTable = document.getElementById('virtual-events-table');
 
       const state = {
         bridges: [],
@@ -1719,7 +1791,63 @@ header('Content-Type: text/html; charset=utf-8');
         loxoneBaseUrl: '',
         virtualInputs: [],
         editingVirtualInputId: null,
+        virtualInputStates: {},
+        virtualInputEvents: [],
       };
+
+      const VIRTUAL_EVENT_LIMIT = 50;
+
+      const translateState = (value) => {
+        const normalised = (value || '').toString().toLowerCase();
+        if (normalised === 'active') {
+          return 'Aktiv';
+        }
+        if (normalised === 'inactive') {
+          return 'Inaktiv';
+        }
+        if (normalised === 'reset') {
+          return 'Reset';
+        }
+        if (normalised === '') {
+          return 'unbekannt';
+        }
+        return value;
+      };
+
+      const formatTimestamp = (value) => {
+        if (!value) {
+          return '—';
+        }
+        const date = new Date(value);
+        if (Number.isNaN(date.getTime())) {
+          return value;
+        }
+        return date.toLocaleString('de-DE');
+      };
+
+      const buildEventDetails = (event) => {
+        if (!event || typeof event !== 'object') {
+          return '';
+        }
+        const details = [];
+        const value = event.value;
+        if (value !== undefined && value !== null && String(value).trim() !== '') {
+          details.push(`Wert: ${value}`);
+        }
+        if (event.trigger) {
+          details.push(`Trigger: ${event.trigger}`);
+        }
+        if (event.extra && typeof event.extra === 'object' && 'motion_state' in event.extra) {
+          const motionActive = Boolean(event.extra.motion_state);
+          details.push(`Bewegung: ${motionActive ? 'aktiv' : 'inaktiv'}`);
+        }
+        if (event.delivered === false) {
+          details.push('Nicht an Loxone gesendet');
+        }
+        return details.join(' • ');
+      };
+
+      let virtualEventsInterval = null;
 
       const LIGHT_HELPER_DEFAULT =
         'Nachdem du eine Bridge und Lampen-RID gewählt hast, erscheinen hier die fertigen HTTP-Aufrufe ' +
@@ -1882,6 +2010,202 @@ header('Content-Type: text/html; charset=utf-8');
         }
       };
 
+      const updateListStatusIndicators = () => {
+        if (!virtualInputList) {
+          return;
+        }
+        const indicators = virtualInputList.querySelectorAll('[data-role="status-indicator"]');
+        indicators.forEach((indicator) => {
+          if (!(indicator instanceof HTMLElement)) {
+            return;
+          }
+          const id = indicator.getAttribute('data-id');
+          if (!id) {
+            return;
+          }
+          const status = state.virtualInputStates ? state.virtualInputStates[id] : null;
+          if (!status) {
+            indicator.classList.add('muted');
+            indicator.textContent = 'Letztes Ereignis: –';
+            return;
+          }
+          indicator.classList.remove('muted');
+          const label = translateState(status.state);
+          const details = buildEventDetails(status);
+          const timestamp = status.timestamp ? formatTimestamp(status.timestamp) : '';
+          const parts = [`${label}`];
+          if (details) {
+            parts.push(details);
+          }
+          if (timestamp) {
+            parts.push(timestamp);
+          }
+          indicator.textContent = `Letztes Ereignis: ${parts.join(' • ')}`;
+        });
+      };
+
+      const renderVirtualInputStatus = () => {
+        if (virtualStatusTable) {
+          const tbody = document.createElement('tbody');
+          if (!state.virtualInputs.length) {
+            const row = document.createElement('tr');
+            const cell = document.createElement('td');
+            cell.colSpan = 3;
+            cell.className = 'muted';
+            cell.textContent = 'Noch keine Eingänge angelegt.';
+            row.appendChild(cell);
+            tbody.appendChild(row);
+          } else {
+            state.virtualInputs.forEach((entry) => {
+              const row = document.createElement('tr');
+              const nameCell = document.createElement('td');
+              const nameLine = document.createElement('div');
+              nameLine.textContent = entry.name || entry.virtual_input;
+              nameCell.appendChild(nameLine);
+              const detail = document.createElement('div');
+              detail.className = 'resource-detail';
+              detail.textContent = `RID: ${entry.resource_id} • Typ: ${entry.resource_type}`;
+              nameCell.appendChild(detail);
+
+              const statusCell = document.createElement('td');
+              const status = state.virtualInputStates ? state.virtualInputStates[entry.id] : null;
+              if (status) {
+                const tag = document.createElement('span');
+                tag.className = 'tag';
+                tag.textContent = translateState(status.state);
+                statusCell.appendChild(tag);
+                const details = buildEventDetails(status);
+                if (details) {
+                  const statusDetail = document.createElement('div');
+                  statusDetail.className = 'resource-detail';
+                  statusDetail.textContent = details;
+                  statusCell.appendChild(statusDetail);
+                }
+              } else {
+                statusCell.classList.add('muted');
+                statusCell.textContent = 'Noch keine Ereignisse.';
+              }
+
+              const timeCell = document.createElement('td');
+              const timestamp = status && status.timestamp ? formatTimestamp(status.timestamp) : '—';
+              timeCell.textContent = timestamp;
+
+              row.append(nameCell, statusCell, timeCell);
+              tbody.appendChild(row);
+            });
+          }
+          const existing = virtualStatusTable.querySelector('tbody');
+          if (existing) {
+            virtualStatusTable.replaceChild(tbody, existing);
+          } else {
+            virtualStatusTable.appendChild(tbody);
+          }
+        }
+
+        if (virtualEventsTable) {
+          const tbody = document.createElement('tbody');
+          const events = Array.isArray(state.virtualInputEvents)
+            ? [...state.virtualInputEvents].reverse()
+            : [];
+          if (!events.length) {
+            const row = document.createElement('tr');
+            const cell = document.createElement('td');
+            cell.colSpan = 4;
+            cell.className = 'muted';
+            cell.textContent = 'Noch keine Ereignisse aufgezeichnet.';
+            row.appendChild(cell);
+            tbody.appendChild(row);
+          } else {
+            events.forEach((event) => {
+              if (!event || typeof event !== 'object') {
+                return;
+              }
+              const row = document.createElement('tr');
+              const timeCell = document.createElement('td');
+              timeCell.textContent = formatTimestamp(event.timestamp);
+
+              const inputCell = document.createElement('td');
+              const label = event.name || event.virtual_input || event.mapping_id || 'Unbekannt';
+              const labelLine = document.createElement('div');
+              labelLine.textContent = label;
+              inputCell.appendChild(labelLine);
+              const detailParts = [];
+              if (event.virtual_input && event.virtual_input !== label) {
+                detailParts.push(event.virtual_input);
+              }
+              if (event.resource_id) {
+                detailParts.push(event.resource_id);
+              }
+              if (detailParts.length) {
+                const detailLine = document.createElement('div');
+                detailLine.className = 'resource-detail';
+                detailLine.textContent = detailParts.join(' • ');
+                inputCell.appendChild(detailLine);
+              }
+
+              const stateCell = document.createElement('td');
+              const tag = document.createElement('span');
+              tag.className = 'tag';
+              tag.textContent = translateState(event.state);
+              stateCell.appendChild(tag);
+
+              const infoCell = document.createElement('td');
+              const details = buildEventDetails(event);
+              infoCell.textContent = details || '—';
+
+              row.append(timeCell, inputCell, stateCell, infoCell);
+              tbody.appendChild(row);
+            });
+          }
+          const existingEvents = virtualEventsTable.querySelector('tbody');
+          if (existingEvents) {
+            virtualEventsTable.replaceChild(tbody, existingEvents);
+          } else {
+            virtualEventsTable.appendChild(tbody);
+          }
+        }
+
+        updateListStatusIndicators();
+      };
+
+      const loadVirtualInputEvents = async ({ showMessage = false } = {}) => {
+        try {
+          const data = await apiFetch('virtual_input_events', {
+            params: { limit: VIRTUAL_EVENT_LIMIT },
+          });
+          const rawEvents = Array.isArray(data.events) ? data.events : [];
+          const normalisedEvents = rawEvents.filter((item) => item && typeof item === 'object');
+          const statesRaw = data.states && typeof data.states === 'object' ? data.states : {};
+          const normalisedStates = {};
+          Object.entries(statesRaw).forEach(([key, value]) => {
+            if (value && typeof value === 'object') {
+              normalisedStates[key] = value;
+            }
+          });
+          state.virtualInputEvents = normalisedEvents;
+          state.virtualInputStates = normalisedStates;
+          renderVirtualInputStatus();
+          if (showMessage && virtualEventsMessage) {
+            message(virtualEventsMessage, 'success', 'Status aktualisiert.');
+          } else if (virtualEventsMessage && !showMessage) {
+            message(virtualEventsMessage, '', '');
+          }
+        } catch (error) {
+          if (virtualEventsMessage && showMessage) {
+            message(virtualEventsMessage, 'error', `Status konnte nicht geladen werden: ${error.message}`);
+          }
+        }
+      };
+
+      const startVirtualEventPolling = () => {
+        if (virtualEventsInterval) {
+          window.clearInterval(virtualEventsInterval);
+        }
+        virtualEventsInterval = window.setInterval(() => {
+          loadVirtualInputEvents();
+        }, 10000);
+      };
+
       const renderVirtualInputForm = (entry = null) => {
         if (!virtualInputForm) {
           return;
@@ -2042,6 +2366,13 @@ header('Content-Type: text/html; charset=utf-8');
           valueInfo.textContent = parts.join(' • ');
           info.appendChild(valueInfo);
 
+          const statusIndicator = document.createElement('div');
+          statusIndicator.className = 'resource-detail muted';
+          statusIndicator.dataset.role = 'status-indicator';
+          statusIndicator.dataset.id = entry.id;
+          statusIndicator.textContent = 'Letztes Ereignis: –';
+          info.appendChild(statusIndicator);
+
           const actions = document.createElement('div');
           actions.className = 'bridge-actions';
 
@@ -2092,6 +2423,7 @@ header('Content-Type: text/html; charset=utf-8');
         });
 
         virtualInputList.appendChild(list);
+        updateListStatusIndicators();
       };
 
       const updateLightCommandHelper = () => {
@@ -2210,6 +2542,12 @@ header('Content-Type: text/html; charset=utf-8');
       if (loxoneEventMethodSelect) {
         loxoneEventMethodSelect.addEventListener('change', () => {
           state.eventMethod = loxoneEventMethodSelect.value || state.commandMethod || 'POST';
+        });
+      }
+
+      if (refreshVirtualEventsButton) {
+        refreshVirtualEventsButton.addEventListener('click', async () => {
+          await loadVirtualInputEvents({ showMessage: true });
         });
       }
 
@@ -2378,6 +2716,7 @@ header('Content-Type: text/html; charset=utf-8');
           state.virtualInputs = Array.isArray(data.virtual_inputs) ? data.virtual_inputs : [];
           renderLoxoneSettings();
           renderVirtualInputList();
+          renderVirtualInputStatus();
           renderVirtualInputForm();
           updateCommandHelpers();
         } catch (error) {
@@ -2488,6 +2827,7 @@ header('Content-Type: text/html; charset=utf-8');
             state.virtualInputs = state.virtualInputs.filter((entry) => entry.id !== state.editingVirtualInputId);
             message(virtualInputMessage, 'success', 'Eingang gelöscht.');
             renderVirtualInputList();
+            renderVirtualInputStatus();
             renderVirtualInputForm();
           } catch (error) {
             message(virtualInputMessage, 'error', error.message);
@@ -2523,6 +2863,7 @@ header('Content-Type: text/html; charset=utf-8');
               state.virtualInputs = state.virtualInputs.filter((item) => item.id !== id);
               message(virtualInputMessage, 'success', 'Eingang gelöscht.');
               renderVirtualInputList();
+              renderVirtualInputStatus();
               renderVirtualInputForm();
             } catch (error) {
               message(virtualInputMessage, 'error', error.message);
@@ -2603,6 +2944,7 @@ header('Content-Type: text/html; charset=utf-8');
             }
             message(virtualInputMessage, 'success', 'Eingang gespeichert.');
             renderVirtualInputList();
+            renderVirtualInputStatus();
             if (state.editingVirtualInputId) {
               renderVirtualInputForm(entry);
             } else {
@@ -2848,9 +3190,15 @@ header('Content-Type: text/html; charset=utf-8');
         }
       });
 
-      updateCommandHelpers();
-      loadSettings();
-      loadBridges();
+      const init = async () => {
+        updateCommandHelpers();
+        await loadSettings();
+        await loadBridges();
+        await loadVirtualInputEvents();
+        startVirtualEventPolling();
+      };
+
+      init();
     </script>
   </body>
 </html>

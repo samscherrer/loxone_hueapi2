@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import threading
 import time
+import json
 from collections import defaultdict
+from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, Iterator, List, Optional, Tuple
 from urllib.parse import quote
 
@@ -16,12 +19,105 @@ from .config import (
     PluginConfig,
     VirtualInputConfig,
     load_config,
+    runtime_state_path,
 )
 from .hue_client import HueBridgeClient, HueBridgeError
 
 
 def _log(message: str) -> None:
     print(f"[hue-event-forwarder] {message}", flush=True)
+
+
+class EventStateStore:
+    """Persist and expose the latest Hue → Loxone events."""
+
+    def __init__(self, path: Path, max_events: int = 200) -> None:
+        self._path = Path(path)
+        self._max_events = max_events
+        self._lock = threading.Lock()
+        self._counter = int(time.time() * 1000)
+        self._data: Dict[str, Any] = {"events": [], "states": {}}
+        self._load()
+
+    def _load(self) -> None:
+        if not self._path.exists():
+            return
+        try:
+            raw = self._path.read_text(encoding="utf-8")
+            data = json.loads(raw)
+        except (OSError, ValueError):  # pragma: no cover - best effort recovery
+            return
+        if not isinstance(data, dict):
+            return
+        events = data.get("events")
+        states = data.get("states")
+        if not isinstance(events, list):
+            events = []
+        if not isinstance(states, dict):
+            states = {}
+        if len(events) > self._max_events:
+            events = events[-self._max_events :]
+        self._data = {"events": events, "states": states}
+        for event in events:
+            event_id = event.get("event_id")
+            if isinstance(event_id, int):
+                self._counter = max(self._counter, event_id)
+
+    def _next_event_id(self) -> int:
+        self._counter += 1
+        return self._counter
+
+    def _persist_locked(self) -> None:
+        try:
+            self._path.parent.mkdir(parents=True, exist_ok=True)
+            tmp_path = self._path.with_suffix(".tmp")
+            with tmp_path.open("w", encoding="utf-8") as handle:
+                json.dump(self._data, handle, ensure_ascii=False, indent=2)
+                handle.write("\n")
+            tmp_path.replace(self._path)
+        except OSError as exc:  # pragma: no cover - best effort logging
+            _log(f"Statusdatei konnte nicht aktualisiert werden: {exc}")
+
+    def record(
+        self,
+        mapping: VirtualInputConfig,
+        *,
+        event_type: str,
+        state: str,
+        value: Optional[str],
+        trigger: Optional[str] = None,
+        delivered: bool = True,
+        extra: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        timestamp = datetime.now(timezone.utc).isoformat()
+        value_str = "" if value is None else str(value)
+        event: Dict[str, Any] = {
+            "event_id": self._next_event_id(),
+            "timestamp": timestamp,
+            "mapping_id": mapping.id,
+            "bridge_id": mapping.bridge_id,
+            "resource_id": mapping.resource_id,
+            "resource_type": mapping.resource_type,
+            "virtual_input": mapping.virtual_input,
+            "name": mapping.name,
+            "event_type": event_type,
+            "state": state,
+            "value": value_str,
+            "delivered": bool(delivered),
+        }
+        if trigger:
+            event["trigger"] = trigger
+        if extra:
+            event["extra"] = extra
+
+        with self._lock:
+            states = self._data.setdefault("states", {})
+            states[mapping.id] = dict(event)
+            events = self._data.setdefault("events", [])
+            events.append(event)
+            if len(events) > self._max_events:
+                del events[:-self._max_events]
+            self._persist_locked()
 
 
 def _coerce_motion_state(value: Any) -> Optional[bool]:
@@ -125,6 +221,7 @@ class BridgeWorker(threading.Thread):
         bridge_config: HueBridgeConfig,
         sender_provider: Callable[[], LoxoneSender],
         global_stop: threading.Event,
+        state_store: EventStateStore,
     ) -> None:
         super().__init__(daemon=True, name=f"hue-forwarder-{bridge_config.id}")
         self._bridge_config = bridge_config
@@ -134,6 +231,7 @@ class BridgeWorker(threading.Thread):
         self._stop_event = threading.Event()
         self._lock = threading.Lock()
         self._lookup: Dict[Tuple[str, str], Tuple[VirtualInputConfig, ...]] = {}
+        self._state_store = state_store
 
     @property
     def bridge_id(self) -> str:
@@ -234,6 +332,30 @@ class BridgeWorker(threading.Thread):
         elif rtype == "motion":
             self._handle_motion_event(entry, mapping, sender)
 
+    def _record_event(
+        self,
+        mapping: VirtualInputConfig,
+        state: str,
+        value: Optional[str],
+        *,
+        event_type: Optional[str] = None,
+        trigger: Optional[str] = None,
+        delivered: bool = True,
+        extra: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        if not self._state_store:
+            return
+        kind = event_type or mapping.resource_type
+        self._state_store.record(
+            mapping,
+            event_type=kind,
+            state=state,
+            value=value,
+            trigger=trigger,
+            delivered=delivered,
+            extra=extra,
+        )
+
     def _handle_button_event(
         self,
         entry: Dict[str, object],
@@ -252,6 +374,13 @@ class BridgeWorker(threading.Thread):
         if mapping.trigger and mapping.trigger != event_name:
             return
         sender.send(mapping.virtual_input, mapping.active_value)
+        self._record_event(
+            mapping,
+            "active",
+            mapping.active_value,
+            event_type="button",
+            trigger=event_name,
+        )
         if mapping.reset_value is not None and mapping.reset_delay_ms > 0:
             timer = threading.Timer(
                 mapping.reset_delay_ms / 1000.0,
@@ -270,12 +399,39 @@ class BridgeWorker(threading.Thread):
         state = extract_motion_state(entry)
         if state is True:
             sender.send(mapping.virtual_input, mapping.active_value)
-        elif state is False and mapping.inactive_value is not None:
-            sender.send(mapping.virtual_input, mapping.inactive_value)
+            self._record_event(
+                mapping,
+                "active",
+                mapping.active_value,
+                event_type="motion",
+                extra={"motion_state": True},
+            )
+        elif state is False:
+            delivered = False
+            value = mapping.inactive_value
+            if value is not None:
+                sender.send(mapping.virtual_input, value)
+                delivered = True
+            self._record_event(
+                mapping,
+                "inactive",
+                value,
+                event_type="motion",
+                delivered=delivered,
+                extra={"motion_state": False},
+            )
 
     def _send_reset(self, mapping: VirtualInputConfig, sender: LoxoneSender) -> None:
         try:
-            sender.send(mapping.virtual_input, mapping.reset_value or "0")
+            value = mapping.reset_value or "0"
+            sender.send(mapping.virtual_input, value)
+            self._record_event(
+                mapping,
+                "reset",
+                value,
+                event_type=mapping.resource_type,
+                trigger="reset",
+            )
         except RuntimeError as exc:
             _log(
                 f"Reset-Weiterleitung für Bridge '{self._bridge_config.id}' fehlgeschlagen: {exc}"
@@ -291,6 +447,7 @@ class HueEventForwarder:
         self._sender = LoxoneSender()
         self._sender_lock = threading.Lock()
         self._workers: Dict[str, BridgeWorker] = {}
+        self._state_store = EventStateStore(runtime_state_path())
 
     def _get_sender(self) -> LoxoneSender:
         with self._sender_lock:
@@ -334,7 +491,12 @@ class HueEventForwarder:
                 worker = None
 
             if not worker:
-                worker = BridgeWorker(bridge, self._get_sender, self._global_stop)
+                worker = BridgeWorker(
+                    bridge,
+                    self._get_sender,
+                    self._global_stop,
+                    self._state_store,
+                )
                 worker.start()
                 self._workers[bridge.id] = worker
 
@@ -355,6 +517,31 @@ class HueEventForwarder:
                     break
         finally:
             self.stop()
+
+
+def load_event_state(path: str | Path | None = None) -> Dict[str, Any]:
+    """Load the persisted event state file."""
+
+    resolved = Path(path) if path is not None else runtime_state_path()
+    try:
+        raw = resolved.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return {"events": [], "states": {}}
+    except OSError:  # pragma: no cover - unexpected I/O errors
+        return {"events": [], "states": {}}
+
+    try:
+        data = json.loads(raw)
+    except ValueError:
+        return {"events": [], "states": {}}
+
+    events = data.get("events")
+    states = data.get("states")
+    if not isinstance(events, list):
+        events = []
+    if not isinstance(states, dict):
+        states = {}
+    return {"events": events, "states": states}
 
 
 def main() -> int:  # pragma: no cover - CLI wrapper

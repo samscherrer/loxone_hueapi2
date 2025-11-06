@@ -1,7 +1,17 @@
 import pytest
 
 from hue_plugin.config import LoxoneSettings
-from hue_plugin.event_forwarder import LoxoneSender, extract_motion_state
+import json
+
+import pytest
+
+from hue_plugin.config import LoxoneSettings, VirtualInputConfig
+from hue_plugin.event_forwarder import (
+    EventStateStore,
+    LoxoneSender,
+    extract_motion_state,
+    load_event_state,
+)
 
 
 def test_sender_requires_base_url():
@@ -72,3 +82,40 @@ def test_sender_get(monkeypatch):
 )
 def test_extract_motion_state(payload, expected):
     assert extract_motion_state(payload) is expected
+
+
+def test_event_state_store_records_and_trims(tmp_path):
+    path = tmp_path / "state.json"
+    store = EventStateStore(path, max_events=2)
+    mapping = VirtualInputConfig(
+        id="motion-1",
+        bridge_id="bridge-1",
+        resource_id="rid-1",
+        resource_type="motion",
+        virtual_input="VI.Motion",
+        active_value="1",
+        inactive_value="0",
+        reset_value=None,
+        reset_delay_ms=0,
+    )
+
+    store.record(mapping, event_type="motion", state="active", value="1", extra={"motion_state": True})
+    store.record(
+        mapping,
+        event_type="motion",
+        state="inactive",
+        value="0",
+        delivered=False,
+        extra={"motion_state": False},
+    )
+    store.record(mapping, event_type="motion", state="reset", value="0", trigger="reset")
+
+    payload = json.loads(path.read_text())
+    assert len(payload["events"]) == 2
+    assert payload["events"][-1]["state"] == "reset"
+    assert payload["states"]["motion-1"]["state"] == "reset"
+
+
+def test_load_event_state_handles_missing(tmp_path):
+    missing = tmp_path / "does-not-exist.json"
+    assert load_event_state(missing) == {"events": [], "states": {}}
