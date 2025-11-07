@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from typing import Any, Dict, Iterable, Iterator, List, Optional
+from typing import Any, Dict, Iterable, Iterator, List, Optional, Tuple
 
 import requests
 from requests import Response
@@ -101,10 +101,18 @@ class HueBridgeClient:
         *,
         target_rid: Optional[str] = None,
         target_rtype: Optional[str] = None,
+        dynamics_duration: Optional[int] = None,
     ) -> None:
+        if dynamics_duration is None:
+            dynamics_duration = 0
+
         body: _JSON = {"recall": {"action": "active"}}
         if target_rid and target_rtype:
             body["recall"]["target"] = {"rid": target_rid, "rtype": target_rtype}
+        if dynamics_duration is not None:
+            body["recall"]["dynamics"] = {
+                "duration": max(0, min(int(dynamics_duration), 600000))
+            }
         self._put(f"scene/{scene_id}", json=body)
 
     def deactivate_scene(
@@ -143,6 +151,9 @@ class HueBridgeClient:
         *,
         on: Optional[bool] = None,
         brightness: Optional[int] = None,
+        color_xy: Optional[Tuple[float, float]] = None,
+        temperature_mirek: Optional[int] = None,
+        transition_ms: Optional[int] = None,
     ) -> None:
         body: _JSON = {}
         if on is not None:
@@ -151,6 +162,20 @@ class HueBridgeClient:
             if not 0 <= brightness <= 100:
                 raise ValueError("Brightness must be between 0 and 100")
             body.setdefault("dimming", {})["brightness"] = brightness
+        if color_xy is not None:
+            x, y = color_xy
+            if not 0 <= x <= 1 or not 0 <= y <= 1:
+                raise ValueError("xy-Farbwerte müssen zwischen 0 und 1 liegen")
+            body.setdefault("color", {}).setdefault("xy", {})
+            body["color"]["xy"]["x"] = round(x, 4)
+            body["color"]["xy"]["y"] = round(y, 4)
+        if temperature_mirek is not None:
+            mirek = int(temperature_mirek)
+            if not 153 <= mirek <= 500:
+                raise ValueError("Mirek muss zwischen 153 und 500 liegen")
+            body.setdefault("color_temperature", {})["mirek"] = mirek
+        if transition_ms is not None:
+            body.setdefault("dynamics", {})["duration"] = max(0, int(transition_ms))
 
         if not body:
             raise ValueError("At least one state value must be provided")

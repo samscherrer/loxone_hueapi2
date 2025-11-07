@@ -119,6 +119,13 @@ class EventStateStore:
                 del events[:-self._max_events]
             self._persist_locked()
 
+    def clear(self) -> None:
+        """Remove all persisted events and states."""
+
+        with self._lock:
+            self._data = {"events": [], "states": {}}
+            self._persist_locked()
+
 
 def _coerce_motion_state(value: Any) -> Optional[bool]:
     """Best-effort conversion of Hue motion payload values to booleans."""

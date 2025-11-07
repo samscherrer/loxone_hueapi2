@@ -8,7 +8,9 @@ einen kleinen REST-Server lassen sich Lampen, Szenen und Räume abfragen sowie A
 ## Funktionsumfang
 
 * Abfrage von Hue-Lampen, -Szenen und -Räumen über die REST-Schnittstelle.
-* Aktivieren von Szenen und Setzen grundlegender Lampen-Parameter (Ein/Aus, Helligkeit).
+* Aktivieren von Szenen mit sofortiger Ausführung (Hue `dynamics.duration = 0`) und Setzen
+  detaillierter Lampen-Parameter (Ein/Aus, Helligkeit, RGB/XY-Farbe, Farbtemperatur,
+  Überblendzeit).
 * Verwaltung mehrerer Hue Bridges samt Application-/Client-Key direkt in der Weboberfläche.
 * Kontextbezogene Anzeige: Szenen zeigen den verknüpften Raum, Lampen listen beteiligte Räume
   und Szenen auf.
@@ -17,8 +19,9 @@ einen kleinen REST-Server lassen sich Lampen, Szenen und Räume abfragen sowie A
 * Speichern des bevorzugten Loxone-Pfads (öffentlich/Admin) sowie optionaler Zugangsdaten für
   virtuelle Ausgänge direkt in der Oberfläche.
 * Konfigurationsdatei und Umgebungsvariable zur einfachen Anpassung auf dem LoxBerry.
-* Live-Statusübersicht der konfigurierten Hue→Loxone-Eingänge inklusive Ereignisprotokoll und
-  manuellen Testaufrufen für Buttons oder Bewegungsmelder.
+* Live-Statusübersicht der konfigurierten Hue→Loxone-Eingänge inklusive Datum-Filter,
+  Seitennavigation (20 Einträge pro Seite), Cache-Löschung und manuellen Testaufrufen für
+  Buttons oder Bewegungsmelder.
 
 ## Vorbereitung
 
@@ -85,12 +88,13 @@ grafische Oberfläche ausliefert. Dort kannst du
 * Hue Bridges samt Application-Key anlegen, bearbeiten und zwischen ihnen wechseln,
 * die Verbindung zum lokalen REST-Dienst testen,
 * Lampen, Räume, Szenen sowie Schalter und Bewegungsmelder direkt auslesen,
-* sowie einzelne Lampen oder Szenen zum Testen schalten.
+* sowie einzelne Lampen oder Szenen zum Testen schalten – inklusive Farbwahl (RGB oder XY),
+  Farbtemperatur und optionaler Überblendzeit.
 * Pfad und optionale Zugangsdaten für Loxone-Ausgänge speichern, um fertige HTTP-Kommandos
-  schneller zu übernehmen.
+  schneller zu übernehmen und später wiederzuverwenden.
 * Im Abschnitt **„Live-Status & Ereignisse“** sehen, wann Hue-Schalter oder Bewegungsmelder zuletzt
-  ausgelöst haben – inklusive einer kompakten Ereignisliste und einem Button zum manuellen
-  Aktualisieren.
+  ausgelöst haben – inklusive Datum-Filter, Seitennavigation, Protokoll-Löschung und manueller
+  Aktualisierung.
 
 Die Oberfläche lädt die Bridge-Liste automatisch und kommuniziert über einen
 PHP-Proxy mit dem lokalen REST-Dienst. Damit entfällt die manuelle Eingabe einer
@@ -106,12 +110,17 @@ Eingängen in Loxone zu verknüpfen.
 Direkt darunter findest du den Live-Status deiner virtuellen Eingänge. Die Tabelle
 „Aktuelle Zustände“ listet jeden hinterlegten Button oder Bewegungsmelder mitsamt dem
 zuletzt gesendeten Wert und Zeitstempel. Das Ereignisprotokoll zeigt die neuesten
-Hue-Meldungen (inklusive Hinweis, ob der Wert an Loxone weitergereicht wurde). Über
-die Schaltfläche **„Status aktualisieren“** kannst du die Anzeige jederzeit manuell
-neu laden; parallel aktualisiert sich die Übersicht automatisch alle zehn Sekunden.
-Die bekannten Test-Buttons („Test aktiv“, „Test inaktiv“, „Test Reset“) lösen dabei
-sofort den entsprechenden virtuellen Eingang in Loxone aus – hilfreich zum
-Durchspielen, selbst wenn der reale Hue-Sensor gerade nichts meldet.
+Hue-Meldungen (inklusive Hinweis, ob der Wert an Loxone weitergereicht wurde). Die
+Ansicht aktualisiert sich automatisch alle zehn Sekunden; zusätzlich kannst du über
+**„Neu laden“** jederzeit manuell nachschauen.
+Über die Filterzeile über dem Ereignisprotokoll kannst du die Liste auf ein Datum
+einschränken und bei Bedarf mit „Zurück“/„Weiter“ seitenweise durch jeweils 20
+Einträge blättern. Ein Klick auf **„Neu laden“** aktualisiert die Übersicht,
+**„Protokoll löschen“** leert den zwischengespeicherten Verlauf und entfernt ihn
+gleichzeitig aus der Plugin-Laufzeitablage. Die bekannten Test-Buttons („Test aktiv“,
+„Test inaktiv“, „Test Reset“) lösen dabei sofort den entsprechenden virtuellen
+Eingang in Loxone aus – hilfreich zum Durchspielen, selbst wenn der reale
+Hue-Sensor gerade nichts meldet.
 
 ### TLS-Zertifikate der Hue Bridge
 
@@ -200,7 +209,8 @@ http://<loxberry-host>/plugins/hueapiv2/index.php?ajax=1&action=scene_command&br
 
 Optional kannst du einen Zielraum oder eine Zone angeben (Parameter `target_rid` und
 `target_rtype`). Damit stellst du sicher, dass die Szene in dem gewünschten Bereich aktiviert
-bzw. beim Ausschalten vollständig deaktiviert wird:
+bzw. beim Ausschalten vollständig deaktiviert wird. Mit `transition=<ms>` steuerst du optional
+eine Überblendzeit; ohne Angabe führt das Plugin die Szene verzögerungsfrei aus:
 
 ```
 http://<loxberry-host>/plugins/hueapiv2/index.php?ajax=1&action=scene_command&bridge_id=<bridge-id>&scene_id=<scene-rid>&target_rid=<room-id>&target_rtype=room&state=0
@@ -223,8 +233,11 @@ http://<loxberry-host>/plugins/hueapiv2/index.php?ajax=1&action=light_command&br
 ```
 
 Der Parameter `on` akzeptiert `1` (EIN) oder `0` (AUS); `brightness` (0–100) ist optional und
-wird nur für das Einschalten berücksichtigt. Alternativ kannst du den Python-REST-Dienst weiter-
-verwenden, wenn du lieber auf Port `5510` mit JSON arbeitest.
+wird nur für das Einschalten berücksichtigt. Darüber hinaus kannst du Farben per
+`rgb=R,G,B` (0–255) oder `xy=x,y` übergeben, eine Farbtemperatur (in Kelvin) mit
+`temperature=2700` sowie eine Überblendzeit in Millisekunden via `transition=500`
+festlegen. Alternativ kannst du den Python-REST-Dienst weiterverwenden, wenn du lieber
+auf Port `5510` mit JSON arbeitest.
 
 ### Hue-Sensoren auf virtuelle Eingänge abbilden
 

@@ -499,6 +499,170 @@ function extract_query_param(string $value, string $parameter): string
 
 /**
  * @param mixed $value
+ */
+function parse_numeric($value): ?float
+{
+    if (is_int($value) || is_float($value)) {
+        return (float) $value;
+    }
+
+    if (is_string($value)) {
+        $normalised = trim(str_replace(',', '.', $value));
+        if ($normalised === '') {
+            return null;
+        }
+        if (preg_match('/^-?\d+(?:\.\d+)?$/', $normalised)) {
+            return (float) $normalised;
+        }
+    }
+
+    return null;
+}
+
+/**
+ * @param mixed $value
+ */
+function parse_int_value($value): ?int
+{
+    $numeric = parse_numeric($value);
+    if ($numeric === null) {
+        return null;
+    }
+    return (int) round($numeric);
+}
+
+/**
+ * @param mixed $value
+ */
+function parse_percentage_value($value): ?int
+{
+    if ($value === null) {
+        return null;
+    }
+
+    if (is_string($value)) {
+        $raw = trim($value);
+        if ($raw === '') {
+            return null;
+        }
+        $hasPercent = false;
+        if ($raw !== '' && substr($raw, -1) === '%') {
+            $raw = substr($raw, 0, -1);
+            $hasPercent = true;
+        }
+        $numeric = parse_numeric($raw);
+        if ($numeric === null) {
+            return null;
+        }
+        if (!$hasPercent && $numeric >= 0 && $numeric <= 1) {
+            $numeric *= 100;
+        }
+        $value = $numeric;
+    }
+
+    if (is_int($value) || is_float($value)) {
+        $percentage = (int) round((float) $value);
+        if ($percentage < 0) {
+            $percentage = 0;
+        }
+        if ($percentage > 100) {
+            $percentage = 100;
+        }
+        return $percentage;
+    }
+
+    return null;
+}
+
+function parse_rgb_value($value): ?array
+{
+    if ($value === null) {
+        return null;
+    }
+
+    if (is_array($value) && count($value) === 3) {
+        $components = array_values($value);
+        $normalised = [];
+        foreach ($components as $component) {
+            $intValue = parse_int_value($component);
+            if ($intValue === null || $intValue < 0 || $intValue > 255) {
+                return null;
+            }
+            $normalised[] = $intValue;
+        }
+        return $normalised;
+    }
+
+    $raw = (string) $value;
+    $clean = trim($raw);
+    if ($clean === '') {
+        return null;
+    }
+    if (stripos($clean, 'rgb') === 0 && strpos($clean, '(') !== false && strpos($clean, ')') !== false) {
+        $clean = substr($clean, strpos($clean, '(') + 1, strrpos($clean, ')') - strpos($clean, '(') - 1);
+    }
+    if ($clean[0] === '#') {
+        $clean = substr($clean, 1);
+    }
+    $clean = str_replace([';', ':'], ',', $clean);
+    $clean = preg_replace('/\s+/', '', $clean);
+    if ($clean === null) {
+        return null;
+    }
+    if (preg_match('/^[0-9a-fA-F]{6}$/', $clean) === 1) {
+        return [
+            hexdec(substr($clean, 0, 2)),
+            hexdec(substr($clean, 2, 2)),
+            hexdec(substr($clean, 4, 2)),
+        ];
+    }
+    if (preg_match('/^\d{1,3}(,\d{1,3}){2}$/', $clean) === 1) {
+        $parts = array_map('intval', explode(',', $clean));
+        foreach ($parts as $component) {
+            if ($component < 0 || $component > 255) {
+                return null;
+            }
+        }
+        return $parts;
+    }
+
+    return null;
+}
+
+function parse_kelvin_value($value): ?int
+{
+    if ($value === null) {
+        return null;
+    }
+
+    $raw = is_string($value) ? strtolower(trim($value)) : $value;
+    if (is_string($raw)) {
+        $raw = str_replace(['kelvin', 'k'], '', $raw);
+        $raw = trim($raw);
+    }
+
+    $intValue = parse_int_value($raw);
+    return $intValue !== null && $intValue > 0 ? $intValue : null;
+}
+
+function kelvin_to_mirek(int $kelvin): int
+{
+    if ($kelvin <= 0) {
+        throw new RuntimeException('Kelvin muss größer als 0 sein.');
+    }
+
+    $mirek = (int) round(1000000 / $kelvin);
+    if ($mirek < 153) {
+        $mirek = 153;
+    }
+    if ($mirek > 500) {
+        $mirek = 500;
+    }
+    return $mirek;
+}
+
+/**
+ * @param mixed $value
  * @return array{provided: bool, value: ?bool, valid: bool}
  */
 function normalise_optional_bool($value): array
@@ -974,10 +1138,31 @@ function handle_ajax(string $configPath): void
                         $args[] = (string) $limit;
                     }
                 }
+                $dateRaw = trim((string) ($_GET['date'] ?? ''));
+                if ($dateRaw !== '') {
+                    $args[] = '--date';
+                    $args[] = $dateRaw;
+                }
+                $beforeRaw = trim((string) ($_GET['before'] ?? ''));
+                if ($beforeRaw !== '' && preg_match('/^-?\d+$/', $beforeRaw)) {
+                    $args[] = '--before';
+                    $args[] = $beforeRaw;
+                }
+                $afterRaw = trim((string) ($_GET['after'] ?? ''));
+                if ($afterRaw !== '' && preg_match('/^-?\d+$/', $afterRaw)) {
+                    $args[] = '--after';
+                    $args[] = $afterRaw;
+                }
                 $result = call_hue_cli($args);
                 $events = isset($result['events']) && is_array($result['events']) ? $result['events'] : [];
                 $states = isset($result['states']) && is_array($result['states']) ? $result['states'] : [];
-                respond_json(['events' => $events, 'states' => $states]);
+                $metadata = isset($result['metadata']) && is_array($result['metadata']) ? $result['metadata'] : [];
+                respond_json(['events' => $events, 'states' => $states, 'metadata' => $metadata]);
+                break;
+
+            case 'clear_virtual_events':
+                call_hue_cli(['clear-virtual-events']);
+                respond_json(['ok' => true]);
                 break;
 
             case 'light_command':
@@ -987,36 +1172,121 @@ function handle_ajax(string $configPath): void
                 if ($bridgeId === '' || $lightId === '') {
                     throw new RuntimeException('Bridge und Lampen-RID sind erforderlich.');
                 }
-                $body = [];
+                $rawValue = isset($payload['value']) ? trim((string) $payload['value']) : '';
+
                 $stateInfo = ['provided' => false, 'value' => null, 'valid' => true];
-                foreach (['state', 'on', 'value'] as $key) {
+                foreach (['state', 'on'] as $key) {
                     if (array_key_exists($key, $payload)) {
                         $stateInfo = normalise_optional_bool($payload[$key]);
                         break;
                     }
                 }
-                if ($stateInfo['provided']) {
-                    if (!$stateInfo['valid']) {
-                        throw new RuntimeException('Ungültiger Wert für den Schaltzustand.');
-                    }
-                    if ($stateInfo['value'] !== null) {
-                        $body['on'] = $stateInfo['value'];
+
+                if (!$stateInfo['provided'] && $rawValue !== '') {
+                    $lower = strtolower($rawValue);
+                    if (in_array($lower, ['0', '1', 'true', 'false', 'on', 'off', 'yes', 'no'], true)) {
+                        $stateInfo = normalise_optional_bool($lower);
                     }
                 }
-                if (isset($payload['brightness']) && $payload['brightness'] !== '') {
-                    $value = (int) $payload['brightness'];
-                    if ($value < 0 || $value > 100) {
-                        throw new RuntimeException('Die Helligkeit muss zwischen 0 und 100 liegen.');
-                    }
-                    $body['brightness'] = $value;
+
+                if ($stateInfo['provided'] && !$stateInfo['valid']) {
+                    throw new RuntimeException('Ungültiger Wert für den Schaltzustand.');
                 }
+
+                $brightness = null;
+                foreach (['brightness', 'dim', 'dimmer', 'level'] as $key) {
+                    if (isset($payload[$key]) && $payload[$key] !== '') {
+                        $candidate = parse_percentage_value($payload[$key]);
+                        if ($candidate !== null) {
+                            $brightness = $candidate;
+                            break;
+                        }
+                    }
+                }
+                if ($brightness === null && $rawValue !== '' && !preg_match('/[,;#]/', $rawValue)) {
+                    $candidate = parse_percentage_value($rawValue);
+                    if ($candidate !== null && $candidate >= 0 && $candidate <= 100) {
+                        if ($candidate > 1 || strpos($rawValue, '%') !== false) {
+                            $brightness = $candidate;
+                        }
+                    }
+                }
+
+                $rgb = null;
+                foreach (['rgb', 'color', 'colour', 'hex'] as $key) {
+                    if (!empty($payload[$key])) {
+                        $rgb = parse_rgb_value($payload[$key]);
+                        if ($rgb !== null) {
+                            break;
+                        }
+                    }
+                }
+                if ($rgb === null && isset($payload['r'], $payload['g'], $payload['b'])) {
+                    $rgb = parse_rgb_value([$payload['r'], $payload['g'], $payload['b']]);
+                }
+                if ($rgb === null && $rawValue !== '' && preg_match('/[#,:]/', $rawValue)) {
+                    $rgb = parse_rgb_value($rawValue);
+                }
+
+                $kelvin = null;
+                foreach (['temperature', 'color_temperature', 'kelvin'] as $key) {
+                    if (isset($payload[$key]) && $payload[$key] !== '') {
+                        $candidate = parse_kelvin_value($payload[$key]);
+                        if ($candidate !== null) {
+                            $kelvin = $candidate;
+                            break;
+                        }
+                    }
+                }
+                $mirek = null;
+                if ($kelvin !== null) {
+                    $mirek = kelvin_to_mirek($kelvin);
+                } else {
+                    foreach (['mirek', 'ct'] as $key) {
+                        if (isset($payload[$key]) && $payload[$key] !== '') {
+                            $candidate = parse_int_value($payload[$key]);
+                            if ($candidate !== null) {
+                                $mirek = $candidate;
+                                break;
+                            }
+                        }
+                    }
+                }
+
+                $transition = null;
+                foreach (['transition', 'transition_ms', 'duration'] as $key) {
+                    if (isset($payload[$key]) && $payload[$key] !== '') {
+                        $candidate = parse_int_value($payload[$key]);
+                        if ($candidate !== null && $candidate >= 0) {
+                            $transition = $candidate;
+                            break;
+                        }
+                    }
+                }
+
                 $args = ['light-command', '--bridge-id', $bridgeId, '--light-id', $lightId];
-                if (array_key_exists('on', $body)) {
-                    $args[] = $body['on'] ? '--on' : '--off';
+                if ($stateInfo['provided'] && $stateInfo['value'] !== null) {
+                    $args[] = $stateInfo['value'] ? '--on' : '--off';
                 }
-                if (array_key_exists('brightness', $body)) {
+                if ($brightness !== null) {
                     $args[] = '--brightness';
-                    $args[] = (string) $body['brightness'];
+                    $args[] = (string) $brightness;
+                }
+                if ($rgb !== null) {
+                    $args[] = '--rgb';
+                    $args[] = sprintf('#%02X%02X%02X', $rgb[0], $rgb[1], $rgb[2]);
+                }
+                if ($mirek !== null) {
+                    $args[] = '--mirek';
+                    $args[] = (string) $mirek;
+                }
+                if ($transition !== null) {
+                    $args[] = '--transition';
+                    $args[] = (string) $transition;
+                }
+
+                if (count($args) === 4) {
+                    throw new RuntimeException('Bitte einen Schaltzustand, Helligkeit oder Farbwert angeben.');
                 }
                 call_hue_cli($args);
                 respond_json(['ok' => true]);
@@ -1044,6 +1314,16 @@ function handle_ajax(string $configPath): void
                 if ($stateInfo['provided'] && !$stateInfo['valid']) {
                     throw new RuntimeException('Ungültiger Wert für den Szenenstatus.');
                 }
+                $transition = null;
+                foreach (['transition', 'transition_ms', 'duration'] as $key) {
+                    if (isset($payload[$key]) && $payload[$key] !== '') {
+                        $candidate = parse_int_value($payload[$key]);
+                        if ($candidate !== null && $candidate >= 0) {
+                            $transition = $candidate;
+                            break;
+                        }
+                    }
+                }
                 $args = ['scene-command', '--bridge-id', $bridgeId, '--scene-id', $sceneId];
                 if (isset($body['target_rid'], $body['target_rtype'])) {
                     $args[] = '--target-rid';
@@ -1053,6 +1333,10 @@ function handle_ajax(string $configPath): void
                 }
                 if ($stateInfo['provided'] && $stateInfo['value'] !== null) {
                     $args[] = $stateInfo['value'] ? '--on' : '--off';
+                }
+                if ($transition !== null) {
+                    $args[] = '--transition';
+                    $args[] = (string) $transition;
                 }
                 call_hue_cli($args);
                 respond_json(['ok' => true]);
@@ -1164,6 +1448,10 @@ header('Content-Type: text/html; charset=utf-8');
 
       .muted {
         color: rgba(15, 23, 42, 0.6);
+      }
+
+      .muted.small {
+        font-size: 0.85rem;
       }
 
       label {
@@ -1284,9 +1572,17 @@ header('Content-Type: text/html; charset=utf-8');
         gap: 1.1rem;
       }
 
+      .grid.compact {
+        gap: 0.75rem;
+      }
+
       @media (min-width: 740px) {
         .grid.two {
           grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+
+        .grid.three {
+          grid-template-columns: repeat(3, minmax(0, 1fr));
         }
       }
 
@@ -1717,17 +2013,39 @@ header('Content-Type: text/html; charset=utf-8');
 
       <section class="card">
         <h2>Live-Status & Ereignisse</h2>
-        <p class="muted">
-          Beobachte den zuletzt bekannten Zustand deiner virtuellen Eingänge und die letzten
-          Ereignisse, die aus der Hue-Bridge weitergeleitet wurden. Über „Status aktualisieren“
-          kannst du die Anzeige jederzeit manuell neu laden.
-        </p>
-        <div class="actions">
-          <button type="button" id="refresh-virtual-events" class="secondary">
-            Status aktualisieren
-          </button>
+          <p class="muted">
+            Beobachte den zuletzt bekannten Zustand deiner virtuellen Eingänge und die letzten
+            Ereignisse, die aus der Hue-Bridge weitergeleitet wurden. Mit „Neu laden“ aktualisierst
+            du die Tabelle jederzeit manuell; „Protokoll löschen“ leert den zwischengespeicherten
+            Verlauf.
+          </p>
+        <div class="grid three compact" id="virtual-events-controls">
+          <div>
+            <label for="virtual-events-date">Datum filtern</label>
+            <input type="date" id="virtual-events-date" />
+          </div>
+          <div class="actions">
+            <button type="button" id="refresh-virtual-events" class="secondary">
+              Neu laden
+            </button>
+            <button type="button" id="clear-virtual-events" class="danger">
+              Protokoll löschen
+            </button>
+          </div>
+          <div class="actions" id="virtual-events-paging">
+            <button type="button" id="virtual-events-prev" class="secondary">
+              Neuere
+            </button>
+            <button type="button" id="virtual-events-next" class="secondary">
+              Ältere
+            </button>
+          </div>
         </div>
         <div id="virtual-events-message" class="message"></div>
+        <p class="muted small" id="virtual-events-hint">
+          Es werden maximal 20 Ereignisse pro Seite angezeigt. Wähle bei Bedarf ein Datum
+          oder nutze „Ältere“, um weitere Einträge zu laden.
+        </p>
         <h3>Aktuelle Zustände</h3>
         <table id="virtual-status-table">
           <thead>
@@ -1776,9 +2094,25 @@ header('Content-Type: text/html; charset=utf-8');
             </select>
           </div>
         </div>
-        <div>
-          <label for="light-brightness">Helligkeit (0-100)</label>
-          <input type="text" id="light-brightness" placeholder="Optional" />
+        <div class="grid two">
+          <div>
+            <label for="light-brightness">Helligkeit (0-100)</label>
+            <input type="text" id="light-brightness" placeholder="Optional" />
+          </div>
+          <div>
+            <label for="light-transition">Übergangszeit (ms)</label>
+            <input type="number" id="light-transition" min="0" step="50" placeholder="Optional" />
+          </div>
+        </div>
+        <div class="grid two">
+          <div>
+            <label for="light-color">Farbe (RGB/Hex)</label>
+            <input type="text" id="light-color" placeholder="#ff8800 oder 255,140,0" />
+          </div>
+          <div>
+            <label for="light-temperature">Farbtemperatur</label>
+            <input type="text" id="light-temperature" placeholder="z. B. 2700K oder 200 (mirek)" />
+          </div>
         </div>
         <div class="actions">
           <button type="button" id="light-submit">Befehl senden</button>
@@ -1885,6 +2219,11 @@ header('Content-Type: text/html; charset=utf-8');
       const virtualInputDeleteButton = document.getElementById('virtual-input-delete');
       const refreshVirtualEventsButton = document.getElementById('refresh-virtual-events');
       const virtualEventsMessage = document.getElementById('virtual-events-message');
+      const virtualEventsDateInput = document.getElementById('virtual-events-date');
+      const virtualEventsPrevButton = document.getElementById('virtual-events-prev');
+      const virtualEventsNextButton = document.getElementById('virtual-events-next');
+      const clearVirtualEventsButton = document.getElementById('clear-virtual-events');
+      const virtualEventsHint = document.getElementById('virtual-events-hint');
       const virtualStatusTable = document.getElementById('virtual-status-table');
       const virtualEventsTable = document.getElementById('virtual-events-table');
 
@@ -1901,9 +2240,12 @@ header('Content-Type: text/html; charset=utf-8');
         editingVirtualInputId: null,
         virtualInputStates: {},
         virtualInputEvents: [],
+        virtualEventsMeta: {},
+        virtualEventsFilters: { date: '', before: null, history: [] },
+        virtualEventsLoading: false,
       };
 
-      const VIRTUAL_EVENT_LIMIT = 50;
+      const VIRTUAL_EVENT_LIMIT = 20;
 
       const translateState = (value) => {
         const normalised = (value || '').toString().toLowerCase();
@@ -1933,6 +2275,18 @@ header('Content-Type: text/html; charset=utf-8');
         return date.toLocaleString('de-DE');
       };
 
+      const formatDateLabel = (value) => {
+        if (!value) {
+          return 'Alle Daten';
+        }
+        const safeValue = `${value}T00:00:00`;
+        const parsed = new Date(safeValue);
+        if (Number.isNaN(parsed.getTime())) {
+          return value;
+        }
+        return parsed.toLocaleDateString('de-DE');
+      };
+
       const buildEventDetails = (event) => {
         if (!event || typeof event !== 'object') {
           return '';
@@ -1959,10 +2313,12 @@ header('Content-Type: text/html; charset=utf-8');
 
       const LIGHT_HELPER_DEFAULT =
         'Nachdem du eine Bridge und Lampen-RID gewählt hast, erscheinen hier die fertigen HTTP-Aufrufe ' +
-        'für einen virtuellen Ausgang in Loxone (Wert 1 = EIN, Wert 0 = AUS). Verwende sie mit der HTTP-Methode POST.';
+        'für einen virtuellen Ausgang in Loxone (Wert 1 = EIN, Wert 0 = AUS). Verwende sie mit der HTTP-Methode POST ' +
+        'und ergänze bei Bedarf Parameter wie brightness, rgb, temperature oder transition.';
       const SCENE_HELPER_DEFAULT =
         'Hier findest du nach Auswahl einer Bridge und Szene die beiden URLs für deinen virtuellen Ausgang. ' +
-        'Wert 1 aktiviert die Szene, Wert 0 schaltet den zugehörigen Raum bzw. die Zone aus. Verwende die URLs mit der HTTP-Methode POST.';
+        'Wert 1 aktiviert die Szene, Wert 0 schaltet den zugehörigen Raum bzw. die Zone aus. Verwende die URLs mit der HTTP-Methode POST ' +
+        'und ergänze optional den Parameter transition für schnellere oder weichere Übergänge.';
 
       const ensureHelperMessage = (container, text) => {
         if (!container) {
@@ -2152,6 +2508,23 @@ header('Content-Type: text/html; charset=utf-8');
         });
       };
 
+      const updateVirtualEventControls = () => {
+        if (virtualEventsDateInput) {
+          virtualEventsDateInput.value = state.virtualEventsFilters.date || '';
+        }
+        if (virtualEventsPrevButton) {
+          virtualEventsPrevButton.disabled =
+            state.virtualEventsLoading || state.virtualEventsFilters.history.length === 0;
+        }
+        if (virtualEventsNextButton) {
+          const hasMore = Boolean(state.virtualEventsMeta && state.virtualEventsMeta.has_more);
+          virtualEventsNextButton.disabled = state.virtualEventsLoading || !hasMore;
+        }
+        if (clearVirtualEventsButton) {
+          clearVirtualEventsButton.disabled = state.virtualEventsLoading;
+        }
+      };
+
       const renderVirtualInputStatus = () => {
         if (virtualStatusTable) {
           const tbody = document.createElement('tbody');
@@ -2274,12 +2647,27 @@ header('Content-Type: text/html; charset=utf-8');
         }
 
         updateListStatusIndicators();
+        updateVirtualEventControls();
       };
 
-      const loadVirtualInputEvents = async ({ showMessage = false } = {}) => {
+      const loadVirtualInputEvents = async ({ showMessage = false, reset = false } = {}) => {
+        if (reset) {
+          state.virtualEventsFilters.before = null;
+          state.virtualEventsFilters.history = [];
+        }
+        state.virtualEventsLoading = true;
+        updateVirtualEventControls();
+
         try {
+          const params = { limit: VIRTUAL_EVENT_LIMIT };
+          if (state.virtualEventsFilters.date) {
+            params.date = state.virtualEventsFilters.date;
+          }
+          if (state.virtualEventsFilters.before !== null) {
+            params.before = String(state.virtualEventsFilters.before);
+          }
           const data = await apiFetch('virtual_input_events', {
-            params: { limit: VIRTUAL_EVENT_LIMIT },
+            params,
           });
           const rawEvents = Array.isArray(data.events) ? data.events : [];
           const normalisedEvents = rawEvents.filter((item) => item && typeof item === 'object');
@@ -2290,9 +2678,29 @@ header('Content-Type: text/html; charset=utf-8');
               normalisedStates[key] = value;
             }
           });
+          const metadata = data.metadata && typeof data.metadata === 'object' ? data.metadata : {};
           state.virtualInputEvents = normalisedEvents;
           state.virtualInputStates = normalisedStates;
+          state.virtualEventsMeta = metadata;
+          if (
+            state.virtualEventsFilters.date &&
+            Array.isArray(metadata.available_dates) &&
+            metadata.available_dates.indexOf(state.virtualEventsFilters.date) === -1
+          ) {
+            state.virtualEventsFilters.history = [];
+            state.virtualEventsFilters.before = null;
+          }
           renderVirtualInputStatus();
+          if (virtualEventsHint) {
+            const total =
+              typeof metadata.total_filtered === 'number'
+                ? metadata.total_filtered
+                : normalisedEvents.length;
+            const dateLabel = formatDateLabel(state.virtualEventsFilters.date);
+            const pageInfo = metadata.has_more ? 'Weitere Ereignisse verfügbar.' : 'Keine weiteren Ereignisse.';
+            const countLabel = `Angezeigt: ${normalisedEvents.length} von ${total}`;
+            virtualEventsHint.textContent = `${countLabel} (${dateLabel}). ${pageInfo}`;
+          }
           if (showMessage && virtualEventsMessage) {
             message(virtualEventsMessage, 'success', 'Status aktualisiert.');
           } else if (virtualEventsMessage && !showMessage) {
@@ -2302,6 +2710,9 @@ header('Content-Type: text/html; charset=utf-8');
           if (virtualEventsMessage && showMessage) {
             message(virtualEventsMessage, 'error', `Status konnte nicht geladen werden: ${error.message}`);
           }
+        } finally {
+          state.virtualEventsLoading = false;
+          updateVirtualEventControls();
         }
       };
 
@@ -2310,7 +2721,9 @@ header('Content-Type: text/html; charset=utf-8');
           window.clearInterval(virtualEventsInterval);
         }
         virtualEventsInterval = window.setInterval(() => {
-          loadVirtualInputEvents();
+          if (!state.virtualEventsLoading && state.virtualEventsFilters.before === null) {
+            loadVirtualInputEvents();
+          }
         }, 10000);
       };
 
@@ -2540,6 +2953,10 @@ header('Content-Type: text/html; charset=utf-8');
         }
         const lightId = document.getElementById('light-id').value.trim();
         const brightnessValue = document.getElementById('light-brightness').value.trim();
+        const colorValue = document.getElementById('light-color').value.trim();
+        const temperatureValue = document.getElementById('light-temperature').value.trim();
+        const transitionValue = document.getElementById('light-transition').value.trim();
+        const actionValue = document.getElementById('light-action').value;
         if (!state.activeBridgeId) {
           ensureHelperMessage(lightCommandHelper, 'Bitte zuerst eine Bridge auswählen.');
           return;
@@ -2553,16 +2970,66 @@ header('Content-Type: text/html; charset=utf-8');
           light_id: lightId,
         };
         const onParams = { ...baseParams, on: '1' };
+        const extraParams = {};
         if (brightnessValue !== '') {
-          onParams.brightness = brightnessValue;
+          extraParams.brightness = brightnessValue;
         }
+        if (colorValue !== '') {
+          extraParams.rgb = colorValue;
+        }
+        if (temperatureValue !== '') {
+          const lowered = temperatureValue.toLowerCase();
+          const numeric = Number.parseFloat(temperatureValue);
+          if (lowered.includes('mirek') || (!Number.isNaN(numeric) && numeric > 0 && numeric <= 500 && !lowered.includes('k'))) {
+            extraParams.mirek = temperatureValue;
+          } else {
+            extraParams.temperature = temperatureValue;
+          }
+        }
+        if (transitionValue !== '') {
+          extraParams.transition = transitionValue;
+        }
+        const onParamsWithExtras = { ...onParams, ...extraParams };
         const offParams = { ...baseParams, on: '0' };
+        const offParamsWithExtras = { ...offParams };
+        if (transitionValue !== '') {
+          offParamsWithExtras.transition = transitionValue;
+        }
         const commandOptions = { target: getCommandTarget(), auth: getCommandAuth() };
         const methodLabel = state.commandMethod || 'POST';
-        renderHelperRows(lightCommandHelper, `Virtueller Ausgang (HTTP ${methodLabel}):`, [
-          { label: 'Virtueller Ausgang – EIN (Wert 1):', url: buildUrl('light_command', onParams, commandOptions) },
-          { label: 'Virtueller Ausgang – AUS (Wert 0):', url: buildUrl('light_command', offParams, commandOptions) },
-        ]);
+        const rows = [
+          {
+            label: 'Virtueller Ausgang – EIN (Wert 1):',
+            url: buildUrl('light_command', onParamsWithExtras, commandOptions),
+          },
+          {
+            label: 'Virtueller Ausgang – AUS (Wert 0):',
+            url: buildUrl('light_command', offParamsWithExtras, commandOptions),
+          },
+        ];
+        if (brightnessValue === '') {
+          const dynamicBrightness = `${buildUrl('light_command', onParams, commandOptions)}&brightness=<WERT>`;
+          rows.push({
+            label: 'Dimmen über Wert (z. B. <WERT>=0–100):',
+            url: dynamicBrightness,
+          });
+        }
+        if (colorValue === '') {
+          const colorExample = `${buildUrl('light_command', onParams, commandOptions)}&rgb=<R>,<G>,<B>`;
+          rows.push({
+            label: 'Farbsteuerung (R,G,B 0–255):',
+            url: colorExample,
+          });
+        }
+        if (temperatureValue === '') {
+          const tempExample = `${buildUrl('light_command', onParams, commandOptions)}&temperature=2700`;
+          rows.push({ label: 'Beispiel Farbtemperatur (Kelvin):', url: tempExample });
+        }
+        if (transitionValue === '' && actionValue === 'on') {
+          const transitionExample = `${buildUrl('light_command', onParams, commandOptions)}&transition=0`;
+          rows.push({ label: 'Übergang sofort (transition=0):', url: transitionExample });
+        }
+        renderHelperRows(lightCommandHelper, `Virtueller Ausgang (HTTP ${methodLabel}):`, rows);
       };
 
       const updateSceneCommandHelper = () => {
@@ -2605,10 +3072,13 @@ header('Content-Type: text/html; charset=utf-8');
         const offParams = { ...baseParams, state: '0' };
         const commandOptions = { target: getCommandTarget(), auth: getCommandAuth() };
         const methodLabel = state.commandMethod || 'POST';
-        renderHelperRows(sceneCommandHelper, `Virtueller Ausgang (HTTP ${methodLabel}):`, [
+        const rows = [
           { label: 'Virtueller Ausgang – EIN (Wert 1):', url: buildUrl('scene_command', onParams, commandOptions) },
           { label: 'Virtueller Ausgang – AUS (Wert 0):', url: buildUrl('scene_command', offParams, commandOptions) },
-        ]);
+        ];
+        const transitionExample = `${buildUrl('scene_command', onParams, commandOptions)}&transition=0`;
+        rows.push({ label: 'Schneller Start (transition=0):', url: transitionExample });
+        renderHelperRows(sceneCommandHelper, `Virtueller Ausgang (HTTP ${methodLabel}):`, rows);
       };
 
       const updateCommandHelpers = () => {
@@ -2655,7 +3125,71 @@ header('Content-Type: text/html; charset=utf-8');
 
       if (refreshVirtualEventsButton) {
         refreshVirtualEventsButton.addEventListener('click', async () => {
-          await loadVirtualInputEvents({ showMessage: true });
+          state.virtualEventsFilters.before = null;
+          state.virtualEventsFilters.history = [];
+          await loadVirtualInputEvents({ showMessage: true, reset: true });
+        });
+      }
+
+      if (virtualEventsDateInput) {
+        virtualEventsDateInput.addEventListener('change', async () => {
+          state.virtualEventsFilters.date = virtualEventsDateInput.value || '';
+          await loadVirtualInputEvents({ showMessage: true, reset: true });
+        });
+      }
+
+      if (virtualEventsNextButton) {
+        virtualEventsNextButton.addEventListener('click', async () => {
+          const meta = state.virtualEventsMeta || {};
+          const nextBefore = typeof meta.next_before === 'number' ? meta.next_before : null;
+          if (nextBefore === null) {
+            return;
+          }
+          state.virtualEventsFilters.history.push(state.virtualEventsFilters.before);
+          state.virtualEventsFilters.before = nextBefore;
+          await loadVirtualInputEvents();
+        });
+      }
+
+      if (virtualEventsPrevButton) {
+        virtualEventsPrevButton.addEventListener('click', async () => {
+          if (!state.virtualEventsFilters.history.length) {
+            state.virtualEventsFilters.before = null;
+            await loadVirtualInputEvents({ reset: true });
+            return;
+          }
+          const previous = state.virtualEventsFilters.history.pop();
+          state.virtualEventsFilters.before = previous === undefined ? null : previous;
+          await loadVirtualInputEvents();
+        });
+      }
+
+      if (clearVirtualEventsButton) {
+        clearVirtualEventsButton.addEventListener('click', async () => {
+          if (state.virtualEventsLoading) {
+            return;
+          }
+          try {
+            await apiFetch('clear_virtual_events', { method: 'POST' });
+            state.virtualEventsFilters.before = null;
+            state.virtualEventsFilters.history = [];
+            state.virtualInputEvents = [];
+            state.virtualInputStates = {};
+            state.virtualEventsMeta = {};
+            renderVirtualInputStatus();
+            if (virtualEventsHint) {
+              virtualEventsHint.textContent =
+                'Ereignisprotokoll wurde geleert. Neue Einträge erscheinen, sobald weitere Ereignisse eintreffen.';
+            }
+            message(virtualEventsMessage, 'success', 'Ereignisprotokoll gelöscht.');
+            await loadVirtualInputEvents({ reset: true });
+          } catch (error) {
+            message(
+              virtualEventsMessage,
+              'error',
+              `Protokoll konnte nicht gelöscht werden: ${error.message}`,
+            );
+          }
         });
       }
 
@@ -3074,7 +3608,11 @@ header('Content-Type: text/html; charset=utf-8');
       });
 
       document.getElementById('light-id').addEventListener('input', updateLightCommandHelper);
+      document.getElementById('light-action').addEventListener('change', updateLightCommandHelper);
       document.getElementById('light-brightness').addEventListener('input', updateLightCommandHelper);
+      document.getElementById('light-color').addEventListener('input', updateLightCommandHelper);
+      document.getElementById('light-temperature').addEventListener('input', updateLightCommandHelper);
+      document.getElementById('light-transition').addEventListener('input', updateLightCommandHelper);
       document.getElementById('scene-id').addEventListener('input', updateSceneCommandHelper);
       document.getElementById('scene-target').addEventListener('input', updateSceneCommandHelper);
 
@@ -3237,6 +3775,9 @@ header('Content-Type: text/html; charset=utf-8');
         }
         const action = document.getElementById('light-action').value;
         const brightnessValue = document.getElementById('light-brightness').value.trim();
+        const colorValue = document.getElementById('light-color').value.trim();
+        const temperatureValue = document.getElementById('light-temperature').value.trim();
+        const transitionValue = document.getElementById('light-transition').value.trim();
         const payload = {
           bridge_id: state.activeBridgeId,
           light_id: lightId,
@@ -3249,6 +3790,26 @@ header('Content-Type: text/html; charset=utf-8');
             return;
           }
           payload.brightness = parsed;
+        }
+        if (colorValue !== '') {
+          payload.rgb = colorValue;
+        }
+        if (temperatureValue !== '') {
+          const lowered = temperatureValue.toLowerCase();
+          const numeric = Number.parseFloat(temperatureValue);
+          if (lowered.includes('mirek') || (!Number.isNaN(numeric) && numeric > 0 && numeric <= 500 && !lowered.includes('k'))) {
+            payload.mirek = temperatureValue;
+          } else {
+            payload.temperature = temperatureValue;
+          }
+        }
+        if (transitionValue !== '') {
+          const parsedTransition = Number.parseInt(transitionValue, 10);
+          if (Number.isNaN(parsedTransition) || parsedTransition < 0) {
+            message(lightMessage, 'error', 'Übergangszeit muss eine Zahl größer oder gleich 0 sein.');
+            return;
+          }
+          payload.transition = parsedTransition;
         }
         try {
           await apiFetch('light_command', { method: 'POST', body: payload });
@@ -3302,7 +3863,7 @@ header('Content-Type: text/html; charset=utf-8');
         updateCommandHelpers();
         await loadSettings();
         await loadBridges();
-        await loadVirtualInputEvents();
+        await loadVirtualInputEvents({ reset: true });
         startVirtualEventPolling();
       };
 

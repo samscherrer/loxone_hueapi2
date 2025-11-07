@@ -282,8 +282,17 @@ def test_cli_light_command(monkeypatch, tmp_path):
         def __init__(self, config):
             pass
 
-        def set_light_state(self, light_id, *, on=None, brightness=None):
-            calls.append((light_id, on, brightness))
+        def set_light_state(
+            self,
+            light_id,
+            *,
+            on=None,
+            brightness=None,
+            color_xy=None,
+            temperature_mirek=None,
+            transition_ms=None,
+        ):
+            calls.append((light_id, on, brightness, color_xy, temperature_mirek, transition_ms))
 
     monkeypatch.setattr(cli, "HueBridgeClient", DummyClient)
 
@@ -297,7 +306,52 @@ def test_cli_light_command(monkeypatch, tmp_path):
 
     result = cli.command_light_command(args)
     assert result == {"ok": True}
-    assert calls == [("lamp-1", True, 80)]
+    assert calls == [("lamp-1", True, 80, None, None, None)]
+
+
+def test_cli_light_command_with_color(monkeypatch, tmp_path):
+    config_path = write_config(tmp_path)
+    calls = []
+
+    class DummyClient:
+        def __init__(self, config):
+            pass
+
+        def set_light_state(
+            self,
+            light_id,
+            *,
+            on=None,
+            brightness=None,
+            color_xy=None,
+            temperature_mirek=None,
+            transition_ms=None,
+        ):
+            calls.append((light_id, on, brightness, color_xy, temperature_mirek, transition_ms))
+
+    monkeypatch.setattr(cli, "HueBridgeClient", DummyClient)
+
+    args = Namespace(
+        config=str(config_path),
+        bridge_id="bridge-1",
+        light_id="lamp-1",
+        state=True,
+        brightness=None,
+        rgb="#ff0000",
+        temperature=2700,
+        mirek=None,
+        transition=150,
+    )
+
+    result = cli.command_light_command(args)
+    assert result == {"ok": True}
+    assert len(calls) == 1
+    _, on_value, brightness_value, color_xy, temperature_mirek, transition_ms = calls[0]
+    assert on_value is True
+    assert brightness_value is None
+    assert transition_ms == 150
+    assert temperature_mirek == pytest.approx(int(round(1_000_000 / 2700)))
+    assert color_xy == pytest.approx(cli._rgb_to_xy((255, 0, 0)))
 
 
 def test_cli_scene_command(monkeypatch, tmp_path):
@@ -308,8 +362,15 @@ def test_cli_scene_command(monkeypatch, tmp_path):
         def __init__(self, config):
             pass
 
-        def activate_scene(self, scene_id, *, target_rid=None, target_rtype=None):
-            calls.append((scene_id, target_rid, target_rtype))
+        def activate_scene(
+            self,
+            scene_id,
+            *,
+            target_rid=None,
+            target_rtype=None,
+            dynamics_duration=None,
+        ):
+            calls.append((scene_id, target_rid, target_rtype, dynamics_duration))
 
     monkeypatch.setattr(cli, "HueBridgeClient", DummyClient)
 
@@ -324,7 +385,42 @@ def test_cli_scene_command(monkeypatch, tmp_path):
 
     result = cli.command_scene_command(args)
     assert result == {"ok": True}
-    assert calls == [("scene-1", "group-1", "room")]
+    assert calls == [("scene-1", "group-1", "room", 0)]
+
+
+def test_cli_scene_command_with_transition(monkeypatch, tmp_path):
+    config_path = write_config(tmp_path)
+    calls = []
+
+    class DummyClient:
+        def __init__(self, config):
+            pass
+
+        def activate_scene(
+            self,
+            scene_id,
+            *,
+            target_rid=None,
+            target_rtype=None,
+            dynamics_duration=None,
+        ):
+            calls.append((scene_id, dynamics_duration))
+
+    monkeypatch.setattr(cli, "HueBridgeClient", DummyClient)
+
+    args = Namespace(
+        config=str(config_path),
+        bridge_id="bridge-1",
+        scene_id="scene-1",
+        target_rid=None,
+        target_rtype=None,
+        state=True,
+        transition=200,
+    )
+
+    result = cli.command_scene_command(args)
+    assert result == {"ok": True}
+    assert calls == [("scene-1", 200)]
 
 
 def test_cli_scene_command_off(monkeypatch, tmp_path):
@@ -493,3 +589,41 @@ def test_cli_virtual_input_events(tmp_path, capsys):
     assert output["states"]["vi-1"]["state"] == "inactive"
     assert len(output["events"]) == 1
     assert output["events"][0]["state"] == "inactive"
+    metadata = output.get("metadata")
+    assert metadata["has_more"] is True
+    assert metadata["next_before"] == 2
+    assert metadata["latest_event_id"] == 2
+
+
+def test_cli_virtual_input_events_filters(tmp_path):
+    config_path = write_config(tmp_path)
+    state_file = config_path.parent / "runtime_state.json"
+    payload = {
+        "events": [
+            {"event_id": 1, "timestamp": "2023-01-01T00:00:00Z", "state": "inactive"},
+            {"event_id": 2, "timestamp": "2023-02-01T00:00:00Z", "state": "active"},
+            {"event_id": 3, "timestamp": "2023-02-02T00:00:00Z", "state": "reset"},
+        ],
+        "states": {},
+    }
+    state_file.write_text(json.dumps(payload))
+
+    args = Namespace(config=str(config_path), limit=5, date="2023-02-01", before=None, after=None)
+    result = cli.command_virtual_input_events(args)
+    assert [event["event_id"] for event in result["events"]] == [2]
+
+    args_before = Namespace(config=str(config_path), limit=5, date=None, before=3, after=None)
+    result_before = cli.command_virtual_input_events(args_before)
+    assert all(event["event_id"] < 3 for event in result_before["events"])
+
+
+def test_cli_clear_virtual_events(tmp_path):
+    config_path = write_config(tmp_path)
+    state_file = config_path.parent / "runtime_state.json"
+    state_file.write_text(json.dumps({"events": [{"event_id": 1}], "states": {"foo": {"state": "active"}}}))
+
+    result = cli.command_clear_virtual_events(Namespace(config=str(config_path)))
+    assert result == {"ok": True}
+
+    cleared = json.loads(state_file.read_text())
+    assert cleared == {"events": [], "states": {}}

@@ -67,7 +67,7 @@ def test_activate_scene_payload(client: HueBridgeClient) -> None:
     if isinstance(body, bytes):
         body = body.decode()
     payload = json.loads(body)
-    assert payload == {"recall": {"action": "active"}}
+    assert payload == {"recall": {"action": "active", "dynamics": {"duration": 0}}}
 
 @responses.activate
 def test_set_light_state_validates(client: HueBridgeClient) -> None:
@@ -76,6 +76,12 @@ def test_set_light_state_validates(client: HueBridgeClient) -> None:
 
     with pytest.raises(ValueError):
         client.set_light_state("1", brightness=120)
+
+    with pytest.raises(ValueError):
+        client.set_light_state("1", color_xy=(1.5, 0.2))
+
+    with pytest.raises(ValueError):
+        client.set_light_state("1", temperature_mirek=600)
 
     responses.add(
         responses.PUT,
@@ -93,6 +99,32 @@ def test_set_light_state_validates(client: HueBridgeClient) -> None:
         body = body.decode()
     request_body: Dict[str, object] = json.loads(body)
     assert request_body == {"on": {"on": True}, "dimming": {"brightness": 50}}
+
+    responses.add(
+        responses.PUT,
+        "http://1.2.3.4/clip/v2/resource/light/1",
+        json={},
+        status=200,
+    )
+
+    client.set_light_state(
+        "1",
+        on=False,
+        color_xy=(0.12, 0.34),
+        temperature_mirek=300,
+        transition_ms=150,
+    )
+
+    body = responses.calls[1].request.body
+    if isinstance(body, bytes):
+        body = body.decode()
+    advanced_request: Dict[str, object] = json.loads(body)
+    assert advanced_request == {
+        "on": {"on": False},
+        "color": {"xy": {"x": pytest.approx(0.12, rel=1e-3), "y": pytest.approx(0.34, rel=1e-3)}},
+        "color_temperature": {"mirek": 300},
+        "dynamics": {"duration": 150},
+    }
 
 
 @responses.activate
