@@ -414,26 +414,112 @@ function normalise_virtual_input(array $entry, array $bridges, array $existing):
 function read_json_body(): array
 {
     $raw = file_get_contents('php://input');
-    if ($raw === false || $raw === '') {
+    if ($raw === false) {
+        throw new RuntimeException('Anfragekörper konnte nicht gelesen werden.');
+    }
+
+    $trimmed = trim($raw);
+    if ($trimmed === '') {
         return [];
     }
-    $decoded = json_decode($raw, true);
+
+    $decoded = json_decode($trimmed, true);
     if (!is_array($decoded)) {
         throw new RuntimeException('Ungültiger JSON-Body.');
     }
+
     return $decoded;
 }
 
 function request_payload(): array
 {
     $method = strtoupper($_SERVER['REQUEST_METHOD'] ?? 'GET');
-    if (in_array($method, ['POST', 'PUT', 'PATCH'], true)) {
-        $body = read_json_body();
-        if ($body !== []) {
-            return $body;
+    if (!in_array($method, ['POST', 'PUT', 'PATCH'], true)) {
+        return query_payload();
+    }
+
+    $contentTypeRaw = (string) ($_SERVER['CONTENT_TYPE'] ?? '');
+    $contentType = strtolower(trim($contentTypeRaw));
+    $raw = file_get_contents('php://input');
+    if ($raw === false) {
+        $raw = '';
+    }
+    $rawTrimmed = trim($raw);
+
+    if ($contentType !== '' && strpos($contentType, 'application/json') !== false) {
+        if ($rawTrimmed === '') {
+            return query_payload();
+        }
+
+        $decoded = json_decode($rawTrimmed, true);
+        if (!is_array($decoded)) {
+            throw new RuntimeException('Ungültiger JSON-Body.');
+        }
+        return $decoded;
+    }
+
+    if ($contentType !== '' && (strpos($contentType, 'application/x-www-form-urlencoded') !== false || strpos($contentType, 'multipart/form-data') !== false)) {
+        $payload = [];
+        foreach ($_POST as $key => $value) {
+            if (!is_array($value)) {
+                $payload[$key] = $value;
+            }
+        }
+
+        if ($payload === [] && $rawTrimmed !== '') {
+            $parsed = [];
+            parse_str($rawTrimmed, $parsed);
+            if (is_array($parsed)) {
+                foreach ($parsed as $key => $value) {
+                    if (!is_array($value)) {
+                        $payload[$key] = $value;
+                    }
+                }
+            }
+        }
+
+        if ($payload !== []) {
+            return $payload;
+        }
+
+        return query_payload();
+    }
+
+    if ($rawTrimmed !== '') {
+        if ($contentType === '' && ($rawTrimmed[0] ?? '') !== '') {
+            $firstChar = $rawTrimmed[0];
+            if ($firstChar === '{' || $firstChar === '[') {
+                $decoded = json_decode($rawTrimmed, true);
+                if (is_array($decoded)) {
+                    return $decoded;
+                }
+            }
+        }
+
+        if (strpos($rawTrimmed, '=') !== false || strpos($rawTrimmed, '&') !== false) {
+            $parsed = [];
+            parse_str($rawTrimmed, $parsed);
+            if (is_array($parsed) && $parsed !== []) {
+                $payload = [];
+                foreach ($parsed as $key => $value) {
+                    if (!is_array($value)) {
+                        $payload[$key] = $value;
+                    }
+                }
+                if ($payload !== []) {
+                    return $payload;
+                }
+            }
+        } else {
+            return ['value' => $rawTrimmed];
         }
     }
 
+    return query_payload();
+}
+
+function query_payload(): array
+{
     $payload = [];
     foreach ($_GET as $key => $value) {
         if ($key === 'ajax' || $key === 'action') {
