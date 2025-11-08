@@ -517,20 +517,37 @@ class BridgeWorker(threading.Thread):
 
             for mapping in mappings:
                 if state is True:
-                    sender.send(mapping.virtual_input, mapping.active_value)
+                    value = mapping.active_value
+                    delivered = False
+                    if value is not None:
+                        try:
+                            sender.send(mapping.virtual_input, value)
+                            delivered = True
+                        except RuntimeError as exc:
+                            _log(
+                                "Bewegungsmelder-Weiterleitung "
+                                f"für Bridge '{self._bridge_config.id}' fehlgeschlagen: {exc}"
+                            )
                     self._record_event(
                         mapping,
                         "active",
-                        mapping.active_value,
+                        value,
                         event_type="motion",
+                        delivered=delivered,
                         extra={"motion_state": True},
                     )
                 else:
                     delivered = False
                     value = mapping.inactive_value
                     if value is not None:
-                        sender.send(mapping.virtual_input, value)
-                        delivered = True
+                        try:
+                            sender.send(mapping.virtual_input, value)
+                            delivered = True
+                        except RuntimeError as exc:
+                            _log(
+                                "Bewegungsmelder-Weiterleitung "
+                                f"für Bridge '{self._bridge_config.id}' fehlgeschlagen: {exc}"
+                            )
                     self._record_event(
                         mapping,
                         "inactive",

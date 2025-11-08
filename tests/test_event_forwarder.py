@@ -199,3 +199,84 @@ def test_motion_poll_triggers_events(tmp_path):
     dummy_client.payloads = [make_motion(False)]
     worker._poll_motion_states(sender)
     assert events[-1] == ("VI.Motion", "0")
+
+
+def test_motion_poll_handles_sender_errors(tmp_path):
+    config = HueBridgeConfig(
+        id="bridge-1",
+        bridge_ip="192.0.2.1",
+        application_key="abc",
+    )
+    state_path = tmp_path / "state.json"
+    store = EventStateStore(state_path)
+
+    class FailingSender:
+        available = True
+
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def send(self, virtual_input: str, value: str) -> None:
+            self.calls += 1
+            raise RuntimeError("network down")
+
+    sender = FailingSender()
+
+    worker = BridgeWorker(
+        config,
+        sender_provider=lambda: sender,
+        global_stop=threading.Event(),
+        state_store=store,
+    )
+
+    mapping = VirtualInputConfig(
+        id="motion-1",
+        bridge_id="bridge-1",
+        resource_id="rid-motion",
+        resource_type="motion",
+        virtual_input="VI.Motion",
+        active_value="1",
+        inactive_value="0",
+        reset_value=None,
+        reset_delay_ms=0,
+    )
+    worker.update_mappings([mapping])
+
+    class DummyClient:
+        def __init__(self) -> None:
+            self.payloads: list[HueResource] = []
+
+        def get_motion_sensors(self):
+            return list(self.payloads)
+
+    dummy_client = DummyClient()
+    worker._client = dummy_client  # type: ignore[attr-defined]
+
+    def make_motion(state: bool) -> HueResource:
+        return HueResource(
+            id="rid-motion",
+            type="motion",
+            metadata={},
+            data={
+                "motion": {
+                    "motion_report": {
+                        "motion": state,
+                        "motion_valid": True,
+                    }
+                }
+            },
+        )
+
+    dummy_client.payloads = [make_motion(True)]
+    worker._poll_motion_states(sender)
+
+    dummy_client.payloads = [make_motion(False)]
+    worker._poll_motion_states(sender)
+
+    state = load_event_state(state_path)
+    assert state["events"]
+    assert state["events"][0]["state"] == "active"
+    assert state["events"][0]["delivered"] is False
+    assert state["events"][-1]["state"] == "inactive"
+    assert state["events"][-1]["delivered"] is False
+    assert sender.calls == 2
