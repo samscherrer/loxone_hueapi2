@@ -103,16 +103,13 @@ class HueBridgeClient:
         target_rtype: Optional[str] = None,
         dynamics_duration: Optional[int] = None,
     ) -> None:
-        if dynamics_duration is None:
-            dynamics_duration = 0
-
         body: _JSON = {"recall": {"action": "active"}}
         if target_rid and target_rtype:
             body["recall"]["target"] = {"rid": target_rid, "rtype": target_rtype}
         if dynamics_duration is not None:
-            body["recall"]["dynamics"] = {
-                "duration": max(0, min(int(dynamics_duration), 600000))
-            }
+            duration = max(0, min(int(dynamics_duration), 600000))
+            if duration > 0:
+                body["recall"]["dynamics"] = {"duration": duration}
         self._put(f"scene/{scene_id}", json=body)
 
     def deactivate_scene(

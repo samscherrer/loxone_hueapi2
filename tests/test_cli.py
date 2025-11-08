@@ -385,7 +385,7 @@ def test_cli_scene_command(monkeypatch, tmp_path):
 
     result = cli.command_scene_command(args)
     assert result == {"ok": True}
-    assert calls == [("scene-1", "group-1", "room", 0)]
+    assert calls == [("scene-1", "group-1", "room", None)]
 
 
 def test_cli_scene_command_with_transition(monkeypatch, tmp_path):

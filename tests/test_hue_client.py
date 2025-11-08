@@ -67,7 +67,29 @@ def test_activate_scene_payload(client: HueBridgeClient) -> None:
     if isinstance(body, bytes):
         body = body.decode()
     payload = json.loads(body)
-    assert payload == {"recall": {"action": "active", "dynamics": {"duration": 0}}}
+    assert payload == {"recall": {"action": "active"}}
+
+
+@responses.activate
+def test_activate_scene_with_transition(client: HueBridgeClient) -> None:
+    responses.add(
+        responses.PUT,
+        "http://1.2.3.4/clip/v2/resource/scene/scene-id",
+        json={},
+        status=200,
+    )
+
+    client.activate_scene("scene-id", dynamics_duration=150)
+
+    import json
+
+    body = responses.calls[0].request.body
+    if isinstance(body, bytes):
+        body = body.decode()
+    payload = json.loads(body)
+    assert payload == {
+        "recall": {"action": "active", "dynamics": {"duration": 150}}
+    }
 
 @responses.activate
 def test_set_light_state_validates(client: HueBridgeClient) -> None:

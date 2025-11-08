@@ -391,9 +391,10 @@ def command_scene_command(args: argparse.Namespace) -> Dict[str, Any]:
     bridge = _bridge_config(config, args.bridge_id)
     client = _client(bridge)
 
-    transition_ms: Optional[int] = 0
+    transition_ms: Optional[int] = None
     if getattr(args, "transition", None) is not None:
-        transition_ms = max(0, int(args.transition))
+        candidate = max(0, int(args.transition))
+        transition_ms = candidate if candidate > 0 else None
 
     try:
         state = True if args.state is None else args.state

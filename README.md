@@ -8,7 +8,7 @@ einen kleinen REST-Server lassen sich Lampen, Szenen und Räume abfragen sowie A
 ## Funktionsumfang
 
 * Abfrage von Hue-Lampen, -Szenen und -Räumen über die REST-Schnittstelle.
-* Aktivieren von Szenen mit sofortiger Ausführung (Hue `dynamics.duration = 0`) und Setzen
+* Aktivieren von Szenen ohne dynamische Wiedergabe (standardmäßig sofort) und Setzen
   detaillierter Lampen-Parameter (Ein/Aus, Helligkeit, RGB/XY-Farbe, Farbtemperatur,
   Überblendzeit).
 * Verwaltung mehrerer Hue Bridges samt Application-/Client-Key direkt in der Weboberfläche.
@@ -215,6 +215,10 @@ eine Überblendzeit; ohne Angabe führt das Plugin die Szene verzögerungsfrei a
 ```
 http://<loxberry-host>/plugins/hueapiv2/index.php?ajax=1&action=scene_command&bridge_id=<bridge-id>&scene_id=<scene-rid>&target_rid=<room-id>&target_rtype=room&state=0
 ```
+
+Mehrfache Auslösungen mit demselben Wert (`state=1`) aktivieren die Szene erneut im statischen
+Modus. Eine dynamische Wiedergabe erfolgt nur, wenn du ausdrücklich einen `transition`-Wert
+größer `0` mitsendest.
 
 Das Plugin antwortet mit einer JSON-Struktur; ein erfolgreicher Aufruf liefert `{"ok": true}`.
 Wenn du stattdessen den Admin-Pfad einsetzt und dieser durch Basic Auth geschützt ist,
