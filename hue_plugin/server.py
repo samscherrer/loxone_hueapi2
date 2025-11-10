@@ -117,10 +117,8 @@ def _load_plugin_config(*, allow_missing: bool = False) -> PluginConfig:
     try:
         return load_config()
     except ConfigError as exc:
-        if allow_missing:
-            message = str(exc)
-            if "does not exist" in message or "keine Hue-Bridges" in message:
-                return PluginConfig()
+        if allow_missing and "does not exist" in str(exc):
+            return PluginConfig()
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
