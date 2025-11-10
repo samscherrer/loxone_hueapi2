@@ -113,10 +113,14 @@ class BridgeUpdateRequest(BaseModel):
     verify_tls: bool = Field(default=False, description="Verify TLS certificates")
 
 
-def _load_plugin_config() -> PluginConfig:
+def _load_plugin_config(*, allow_missing: bool = False) -> PluginConfig:
     try:
         return load_config()
     except ConfigError as exc:
+        if allow_missing:
+            message = str(exc)
+            if "does not exist" in message or "keine Hue-Bridges" in message:
+                return PluginConfig()
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
@@ -200,7 +204,7 @@ def list_rooms(
 
 @app.get("/config/bridges", response_model=list[BridgeConfigResponse])
 def list_bridge_configs() -> Iterable[BridgeConfigResponse]:
-    plugin_config = _load_plugin_config()
+    plugin_config = _load_plugin_config(allow_missing=True)
     return [BridgeConfigResponse.from_config(bridge) for bridge in plugin_config.bridges]
 
 
@@ -210,7 +214,7 @@ def list_bridge_configs() -> Iterable[BridgeConfigResponse]:
     status_code=status.HTTP_201_CREATED,
 )
 def create_bridge_config(payload: BridgeCreateRequest = Body(...)) -> BridgeConfigResponse:
-    plugin_config = _load_plugin_config()
+    plugin_config = _load_plugin_config(allow_missing=True)
     existing_ids = {bridge.id for bridge in plugin_config.bridges}
 
     bridge_id = payload.id or ensure_bridge_id(
